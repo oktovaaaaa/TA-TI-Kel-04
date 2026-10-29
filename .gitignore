@@ -1,0 +1,38 @@
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv/
+env/
+venv/
+
+# Large Datasets
+CelebA_Spoof/
+CelebA_Spoof*
+NUAA/
+*.zip
+*.zip.*
+*.tar
+*.tar.gz
+*.7z
+
+# Checkpoint model weights (> 100MB exceeds GitHub push limit)
+checkpoints/*
+!checkpoints/.gitkeep
+*.pth
+*.pt
+*.onnx
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Logs & Run Outputs
+hasil_prediksi.png
+*.log
+wandb/
+
+# IDE files
+.vscode/
+.idea/
