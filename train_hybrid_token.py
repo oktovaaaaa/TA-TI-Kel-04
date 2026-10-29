@@ -263,9 +263,9 @@ def evaluate_epoch(model, loader, criterion, device):
 def main():
     parser = argparse.ArgumentParser(description="Training Hybrid Token S-Adapter + ConvNeXt")
     parser.add_argument("--data_dir", type=str, default="./CelebA_Spoof")
-    parser.add_argument("--samples", type=int, default=500, help="Jumlah total sample gambar (500 untuk Fast Mode, -1 untuk semua)")
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--samples", type=int, default=-1, help="Jumlah total sample gambar (-1 untuk seluruh dataset)")
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr_adapter", type=float, default=1e-4)
     parser.add_argument("--lr_head", type=float, default=1e-3)
     parser.add_argument("--vit_name", type=str, default="vit_tiny_patch16_224", help="Backbone ViT (default: vit_tiny_patch16_224)")
