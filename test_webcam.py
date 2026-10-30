@@ -74,15 +74,9 @@ def main():
 
     model = load_trained_model(args.checkpoint)
 
-    # Load OpenCV Face Detector (Haarcascade dengan Fallback)
+    # Load OpenCV Face Detector (Haarcascade)
     cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-    if hasattr(cv2, 'CascadeClassifier'):
-        face_cascade = cv2.CascadeClassifier(cascade_path)
-    elif hasattr(cv2, 'objdetect') and hasattr(cv2.objdetect, 'CascadeClassifier'):
-        face_cascade = cv2.objdetect.CascadeClassifier(cascade_path)
-    else:
-        print("[Error] Modul CascadeClassifier tidak ditemukan di OpenCV.")
-        sys.exit(1)
+    face_cascade = cv2.CascadeClassifier(cascade_path)
 
     print(f"\n[Info] Membuka webcam (Device ID: {args.cam})... Tekan tombol 'q' pada jendela video untuk keluar.")
     cap = cv2.VideoCapture(args.cam)
