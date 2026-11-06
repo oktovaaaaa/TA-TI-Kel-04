@@ -374,24 +374,34 @@ class EarlyStopping:
             return False
 
 # ============================================================
-# 7. TRAINING & EVALUATION
+# 7. TRAINING & EVALUATION (DENGAN AKSELERASI AMP MIXED PRECISION)
 # ============================================================
-def train_epoch(model, loader, criterion, optimizer, device):
+def train_epoch(model, loader, criterion, optimizer, scaler, device, amp_dtype=torch.bfloat16):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
+    use_amp = (device.type == "cuda")
 
     pbar = tqdm(loader, desc="Training Batch (Base)", leave=False)
     for images, labels in pbar:
-        images, labels = images.to(device), labels.to(device)
-        optimizer.zero_grad()
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        optimizer.zero_grad(set_to_none=True)
 
-        out = model(images)
-        logits = out["logits"]
-        loss = criterion(logits, labels)
+        with torch.cuda.amp.autocast(dtype=amp_dtype, enabled=use_amp):
+            out = model(images)
+            logits = out["logits"]
+            loss = criterion(logits, labels)
 
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        if scaler is not None and scaler.is_enabled():
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
         total_loss += loss.item() * images.size(0)
         preds = logits.argmax(dim=-1)
@@ -403,17 +413,20 @@ def train_epoch(model, loader, criterion, optimizer, device):
     return total_loss / total, correct / total
 
 @torch.no_grad()
-def evaluate_epoch(model, loader, criterion, device):
+def evaluate_epoch(model, loader, criterion, device, amp_dtype=torch.bfloat16):
     model.eval()
     total_loss = 0.0
     all_targets, all_scores = [], []
+    use_amp = (device.type == "cuda")
 
     for images, labels in tqdm(loader, desc="Eval Batch", leave=False):
-        images, labels = images.to(device), labels.to(device)
-        out = model(images)
-        logits = out["logits"]
-        probs = out["probs"]
-        loss = criterion(logits, labels)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        with torch.cuda.amp.autocast(dtype=amp_dtype, enabled=use_amp):
+            out = model(images)
+            logits = out["logits"]
+            probs = out["probs"]
+            loss = criterion(logits, labels)
 
         total_loss += loss.item() * images.size(0)
         all_targets.extend(labels.cpu().numpy().tolist())
@@ -431,7 +444,7 @@ def main():
     parser = argparse.ArgumentParser(description="Training Hybrid Token S-Adapter (ConvNeXt-Base + ViT-Base)")
     parser.add_argument("--data_dir", type=str, default="./CelebA_Spoof")
     parser.add_argument("--samples", type=int, default=-1, help="-1 untuk seluruh dataset CelebA-Spoof")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size 16 optimal untuk model Base di GPU VRAM 18GB")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size 64 optimal untuk memaksimalkan VRAM & Tensor Cores GPU H200 (default: 64)")
     parser.add_argument("--epochs", type=int, default=20, help="Total epoch training")
     parser.add_argument("--lr_adapter", type=float, default=1e-4)
     parser.add_argument("--lr_head", type=float, default=1e-3)
@@ -442,7 +455,7 @@ def main():
     parser.add_argument("--patience", type=int, default=5, help="Jumlah epoch toleransi Early Stopping (default: 5, set <= 0 untuk nonaktifkan)")
     parser.add_argument("--min_delta", type=float, default=0.001, help="Peningkatan minimal AUC agar dihitung membaik (default: 0.001)")
     parser.add_argument("--save_dir", type=str, default="./checkpoints_base", help="Folder khusus menyimpan model Base")
-    parser.add_argument("--workers", type=int, default=4 if os.name != 'nt' else 0)
+    parser.add_argument("--workers", type=int, default=8 if os.name != 'nt' else 0, help="Jumlah worker CPU DataLoader (default: 8 di Linux, 0 di Windows)")
     args = parser.parse_args()
 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
@@ -481,10 +494,22 @@ def main():
 
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, sampler=make_weighted_sampler(df_train),
-        num_workers=args.workers, pin_memory=True if torch.cuda.is_available() else False
+        num_workers=args.workers, pin_memory=True if torch.cuda.is_available() else False,
+        persistent_workers=True if args.workers > 0 else False,
+        prefetch_factor=2 if args.workers > 0 else None
     )
-    val_loader  = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    val_loader  = DataLoader(
+        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.workers,
+        pin_memory=True if torch.cuda.is_available() else False,
+        persistent_workers=True if args.workers > 0 else False,
+        prefetch_factor=2 if args.workers > 0 else None
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.workers,
+        pin_memory=True if torch.cuda.is_available() else False,
+        persistent_workers=True if args.workers > 0 else False,
+        prefetch_factor=2 if args.workers > 0 else None
+    )
 
     print("\n" + "="*75)
     print("INISIALISASI MODEL HYBRID TOKEN S-ADAPTER + CONVNEXT (VERSI BASE)")
@@ -512,6 +537,19 @@ def main():
     print(f"Trainable Parameter  : {trainable_params:,} ({trainable_pct:.2f}%)")
     print(f"Frozen Parameter     : {frozen_params:,} ({100 - trainable_pct:.2f}%)")
 
+    # [AKSELERASI GPU]: Setup Mixed Precision (AMP BFloat16 / Float16)
+    use_cuda = (DEVICE.type == "cuda")
+    use_bf16 = use_cuda and torch.cuda.is_bf16_supported()
+    amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
+    scaler = torch.cuda.amp.GradScaler(enabled=(use_cuda and not use_bf16))
+
+    if use_cuda:
+        precision_type = "BFloat16 (Native Hopper Tensor Cores)" if use_bf16 else "Float16 (GradScaler)"
+        print(f"[AKSELERASI H200] Mixed Precision AKTIF ({precision_type})")
+        print(f"[AKSELERASI H200] Batch Size: {args.batch_size} | DataLoader Workers: {args.workers}")
+    else:
+        print("[AKSELERASI GPU] CPU Mode (Mixed Precision Nonaktif)")
+
     # [POINT 1]: Inisialisasi Logger & Simpan Konfigurasi Parameter Awal (Versi Base)
     logger = TrainingLogger(save_dir=args.save_dir, experiment_name="HybridTokenSAdapterConvNeXt_BASE")
     dataset_stats = {
@@ -522,7 +560,9 @@ def main():
         "val_samples": len(df_val),
         "test_samples": len(df_test),
         "device": str(DEVICE),
-        "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None (CPU)"
+        "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None (CPU)",
+        "mixed_precision": "bfloat16" if use_bf16 else ("float16" if use_cuda else "fp32"),
+        "workers": args.workers
     }
     model_stats = {
         "total_parameters": total_params,
@@ -555,8 +595,8 @@ def main():
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, DEVICE)
-        val_metrics, _, _ = evaluate_epoch(model, val_loader, criterion, DEVICE)
+        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, scaler, DEVICE, amp_dtype)
+        val_metrics, _, _ = evaluate_epoch(model, val_loader, criterion, DEVICE, amp_dtype)
 
         lr_adapter = optimizer.param_groups[0]['lr']
         lr_head = optimizer.param_groups[1]['lr'] if len(optimizer.param_groups) > 1 else lr_adapter
@@ -626,7 +666,7 @@ def main():
         model.load_state_dict(ckpt["model_state_dict"])
         print(f"Checkpoint terbaik (Epoch {ckpt['epoch']}) dimuat.")
 
-    test_metrics, _, _ = evaluate_epoch(model, test_loader, criterion, DEVICE)
+    test_metrics, _, _ = evaluate_epoch(model, test_loader, criterion, DEVICE, amp_dtype)
     print("\n--- HASIL EVALUASI TEST SET (HYBRID TOKEN S-ADAPTER + CONVNEXT BASE) ---")
     print(f"Accuracy : {test_metrics['accuracy']*100:.2f}%")
     print(f"AUC      : {test_metrics['auc']:.4f}")
