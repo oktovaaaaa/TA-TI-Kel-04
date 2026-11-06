@@ -25,6 +25,8 @@ import sys
 import time
 import argparse
 import random
+import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -202,7 +204,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluasi Formal Model pada Test Set CelebA-Spoof")
     parser.add_argument("--checkpoint", type=str, default="./checkpoints_base/best_token_hybrid_base_model.pth")
     parser.add_argument("--data_dir", type=str, default="./CelebA_Spoof")
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--workers", type=int, default=4 if os.name != 'nt' else 0)
     parser.add_argument("--max_test_samples", type=int, default=-1, help="-1 untuk seluruh test set")
     args = parser.parse_args()
@@ -217,11 +219,11 @@ def main():
 
     subjs = list(df.subject.unique())
     if len(subjs) >= 3:
-        # Menjaga konsistensi protokol splitting (Unseen Test Subjects)
-        train_subjs, test_subjs = train_test_split(subjs, test_size=0.2, random_state=SEED)
+        # Menjaga konsistensi protokol splitting (15% Unseen Test Subjects persis saat training)
+        train_subjs, test_subjs = train_test_split(subjs, test_size=0.15, random_state=SEED)
         df_test = df[df.subject.isin(test_subjs)].reset_index(drop=True)
     else:
-        _, df_test = train_test_split(df, test_size=0.2, random_state=SEED)
+        _, df_test = train_test_split(df, test_size=0.15, random_state=SEED)
 
     if args.max_test_samples > 0 and len(df_test) > args.max_test_samples:
         df_test = df_test.sample(n=args.max_test_samples, random_state=SEED).reset_index(drop=True)
@@ -233,11 +235,18 @@ def main():
     test_ds = CelebASpoofDataset(df_test, transform=val_transform, use_bbox=True)
     test_loader = DataLoader(
         test_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True if torch.cuda.is_available() else False
+        num_workers=args.workers, pin_memory=True if torch.cuda.is_available() else False,
+        persistent_workers=True if args.workers > 0 else False,
+        prefetch_factor=2 if args.workers > 0 else None
     )
 
     # 3. Jalankan Pengujian Kuantitatif
-    print(f"\n[3/4] Menjalankan inferensi pada Test Set menggunakan device: {DEVICE} ...")
+    use_amp = (DEVICE.type == "cuda")
+    use_bf16 = use_amp and torch.cuda.is_bf16_supported()
+    amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
+    precision_str = "BFloat16 (Hopper Native)" if use_bf16 else ("Float16" if use_amp else "FP32")
+    print(f"\n[3/4] Menjalankan inferensi pada Test Set menggunakan device: {DEVICE} ({precision_str}) ...")
+
     criterion = nn.CrossEntropyLoss()
     total_loss = 0.0
     all_targets, all_scores, all_preds = [], [], []
@@ -245,11 +254,13 @@ def main():
     start_time = time.time()
     with torch.no_grad():
         for images, labels in tqdm(test_loader, desc="Testing Progress"):
-            images, labels = images.to(DEVICE), labels.to(DEVICE)
-            out = model(images)
-            logits = out["logits"]
-            probs = out["probs"]
-            loss = criterion(logits, labels)
+            images = images.to(DEVICE, non_blocking=True)
+            labels = labels.to(DEVICE, non_blocking=True)
+            with torch.cuda.amp.autocast(dtype=amp_dtype, enabled=use_amp):
+                out = model(images)
+                logits = out["logits"]
+                probs = out["probs"]
+                loss = criterion(logits, labels)
 
             total_loss += loss.item() * images.size(0)
             preds = logits.argmax(dim=-1)
@@ -302,8 +313,40 @@ def main():
     plt.tight_layout()
     chart_output = f"./eval_test_results_{'base' if is_base else 'tiny'}.png"
     plt.savefig(chart_output, dpi=150)
+    
+    # Simpan juga ke folder checkpoint
+    ckpt_dir = Path(args.checkpoint).parent
+    plt.savefig(ckpt_dir / f"eval_test_results_{'base' if is_base else 'tiny'}.png", dpi=150)
     plt.close()
-    print(f"\n[SUCCESS] Grafik Confusion Matrix & ROC Curve disimpan di: {chart_output}")
+
+    # Simpan ringkasan ke final_test_summary.json (Poin 1 & 4 Panduan Pembimbing)
+    summary_data = {
+        "architecture": "ConvNeXt-Base + ViT-Base" if is_base else "ConvNeXt-Tiny + ViT-Tiny",
+        "evaluated_checkpoint": str(args.checkpoint),
+        "evaluated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "total_test_samples": len(all_targets),
+        "live_samples": int((np.array(all_targets) == 1).sum()),
+        "spoof_samples": int((np.array(all_targets) == 0).sum()),
+        "evaluation_duration_seconds": round(elapsed, 2),
+        "metrics_iso_30107_3": {
+            "test_accuracy": round(metrics["accuracy"], 4),
+            "test_accuracy_pct": f"{metrics['accuracy'] * 100:.2f}%",
+            "test_auc": round(metrics["auc"], 4),
+            "test_apcer": round(metrics["apcer"], 4),
+            "test_apcer_pct": f"{metrics['apcer'] * 100:.2f}%",
+            "test_bpcer": round(metrics["bpcer"], 4),
+            "test_bpcer_pct": f"{metrics['bpcer'] * 100:.2f}%",
+            "test_hter": round(metrics["hter"], 4),
+            "test_hter_pct": f"{metrics['hter'] * 100:.2f}%",
+            "test_loss": round(metrics["loss"], 4)
+        }
+    }
+    summary_path = ckpt_dir / "final_test_summary.json"
+    with open(summary_path, mode="w", encoding="utf-8") as f:
+        json.dump(summary_data, f, indent=4)
+
+    print(f"\n[SUCCESS] Ringkasan metrik formal disimpan di: {summary_path}")
+    print(f"[SUCCESS] Grafik Confusion Matrix & ROC Curve disimpan di: {chart_output}")
     print("Gunakan tabel dan gambar ini langsung untuk Bab 4 Skripsi Anda!")
 
 if __name__ == "__main__":
