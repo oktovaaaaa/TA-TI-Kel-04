@@ -27,6 +27,8 @@ import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 import math, random, time, warnings, argparse
+import json, csv
+from datetime import datetime
 warnings.filterwarnings('ignore')
 from pathlib import Path
 
@@ -193,7 +195,186 @@ def calculate_metrics(y_true, y_scores, threshold=0.5):
     }
 
 # ============================================================
-# 5. TRAINING & EVALUATION
+# 5. EXPERIMENT LOGGER (POINT 1)
+# ============================================================
+class TrainingLogger:
+    """
+    Menangani Point 1: Pencatatan parameter konfigurasi, parameter PEFT,
+    riwayat epoch (CSV & JSON secara realtime), serta ringkasan evaluasi akhir.
+    """
+    def __init__(self, save_dir, experiment_name="HybridTokenSAdapterConvNeXt_BASE"):
+        self.save_dir = Path(save_dir)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.experiment_name = experiment_name
+        self.csv_path = self.save_dir / "training_history.csv"
+        self.json_path = self.save_dir / "training_history.json"
+        self.config_path = self.save_dir / "training_config.json"
+        self.summary_path = self.save_dir / "final_test_summary.json"
+        
+        self.records = []
+        self._init_csv()
+
+    def _init_csv(self):
+        with open(self.csv_path, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "epoch", "elapsed_sec", "lr_adapter", "lr_head",
+                "train_loss", "train_acc",
+                "val_loss", "val_acc", "val_auc", "val_hter", "val_apcer", "val_bpcer",
+                "is_best"
+            ])
+
+    def log_config(self, args_dict: dict, model_stats: dict, dataset_stats: dict):
+        config_data = {
+            "experiment_name": self.experiment_name,
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "dataset": dataset_stats,
+            "model_architecture": {
+                "vit_name": args_dict.get("vit_name"),
+                "convnext_name": args_dict.get("convnext_name"),
+                "adapter_bottleneck": args_dict.get("adapter_bottleneck"),
+                "num_heads": args_dict.get("num_heads"),
+                "num_classes": 2,
+                "pretrained": True,
+                "freeze_backbone": True,
+            },
+            "parameter_efficiency": model_stats,
+            "training_hyperparameters": {
+                "batch_size": args_dict.get("batch_size"),
+                "epochs": args_dict.get("epochs"),
+                "lr_adapter": args_dict.get("lr_adapter"),
+                "lr_head": args_dict.get("lr_head"),
+                "early_stopping_patience": args_dict.get("patience"),
+                "early_stopping_min_delta": args_dict.get("min_delta"),
+                "early_stopping_enabled": args_dict.get("patience", 0) > 0,
+                "optimizer": "AdamW",
+                "weight_decay_adapter": 1e-4,
+                "weight_decay_head": 1e-2,
+                "scheduler": f"CosineAnnealingLR (T_max={args_dict.get('epochs')}, eta_min=1e-6)",
+                "loss": "FocalLoss (gamma=2.0, alpha=0.25)",
+                "seed": 42,
+            }
+        }
+        with open(self.config_path, mode="w", encoding="utf-8") as f:
+            json.dump(config_data, f, indent=4)
+        print(f"[LOGGER] Konfigurasi parameter disimpan di: {self.config_path}")
+
+    def log_epoch(self, epoch: int, elapsed: float, lr_adapter: float, lr_head: float,
+                  train_loss: float, train_acc: float, val_metrics: dict, is_best: bool):
+        row = [
+            epoch, f"{elapsed:.2f}", f"{lr_adapter:.6e}", f"{lr_head:.6e}",
+            f"{train_loss:.4f}", f"{train_acc:.4f}",
+            f"{val_metrics['loss']:.4f}", f"{val_metrics['accuracy']:.4f}",
+            f"{val_metrics['auc']:.4f}", f"{val_metrics['hter']:.4f}",
+            f"{val_metrics.get('apcer', 0.0):.4f}", f"{val_metrics.get('bpcer', 0.0):.4f}",
+            1 if is_best else 0
+        ]
+        with open(self.csv_path, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
+            f.flush()
+
+        record = {
+            "epoch": epoch,
+            "elapsed_sec": round(elapsed, 2),
+            "lr_adapter": lr_adapter,
+            "lr_head": lr_head,
+            "train_loss": round(train_loss, 4),
+            "train_acc": round(train_acc, 4),
+            "val_loss": round(val_metrics["loss"], 4),
+            "val_acc": round(val_metrics["accuracy"], 4),
+            "val_auc": round(val_metrics["auc"], 4),
+            "val_hter": round(val_metrics["hter"], 4),
+            "val_apcer": round(val_metrics.get("apcer", 0.0), 4),
+            "val_bpcer": round(val_metrics.get("bpcer", 0.0), 4),
+            "is_best": is_best
+        }
+        self.records.append(record)
+        with open(self.json_path, mode="w", encoding="utf-8") as f:
+            json.dump(self.records, f, indent=4)
+
+    def log_final_results(self, best_epoch: int, best_val_auc: float, test_metrics: dict, total_duration: float, early_stopped: bool = False, stopped_epoch: int = None):
+        summary = {
+            "experiment_name": self.experiment_name,
+            "completed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "total_duration_minutes": round(total_duration / 60, 2),
+            "early_stopping": {
+                "triggered": early_stopped,
+                "stopped_epoch": stopped_epoch if early_stopped else None
+            },
+            "best_checkpoint": {
+                "best_epoch": best_epoch,
+                "best_val_auc": round(best_val_auc, 4)
+            },
+            "final_test_set_evaluation": {
+                "test_accuracy": round(test_metrics["accuracy"], 4),
+                "test_accuracy_pct": f"{test_metrics['accuracy'] * 100:.2f}%",
+                "test_auc": round(test_metrics["auc"], 4),
+                "test_apcer": round(test_metrics["apcer"], 4),
+                "test_apcer_pct": f"{test_metrics['apcer'] * 100:.2f}%",
+                "test_bpcer": round(test_metrics["bpcer"], 4),
+                "test_bpcer_pct": f"{test_metrics['bpcer'] * 100:.2f}%",
+                "test_hter": round(test_metrics["hter"], 4),
+                "test_hter_pct": f"{test_metrics['hter'] * 100:.2f}%",
+                "test_loss": round(test_metrics.get("loss", 0.0), 4),
+            }
+        }
+        with open(self.summary_path, mode="w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=4)
+        print(f"\n[LOGGER] Ringkasan hasil evaluasi akhir disimpan di: {self.summary_path}")
+        print(f"[LOGGER] Log riwayat per-epoch lengkap CSV di: {self.csv_path}")
+
+# ============================================================
+# 6. EARLY STOPPING (POINT 2)
+# ============================================================
+class EarlyStopping:
+    """
+    Menangani Point 2: Early Stopping untuk memantau metrik (val_auc)
+    dan menghentikan training otomatis jika performa tidak kunjung membaik
+    setelah 'patience' epoch berturut-turut demi mencegah overfitting.
+    """
+    def __init__(self, patience: int = 5, min_delta: float = 0.001, mode: str = "max"):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.mode = mode
+        self.counter = 0
+        self.best_score = -float("inf") if mode == "max" else float("inf")
+        self.early_stop = False
+        self.best_epoch = 1
+
+    def check(self, current_score: float, epoch: int) -> bool:
+        """
+        Mengecek apakah ada peningkatan skor melampaui min_delta.
+        Return True jika tercatat rekor baru (is_best), False jika tidak.
+        """
+        if self.patience <= 0:
+            if current_score > self.best_score:
+                self.best_score = current_score
+                self.best_epoch = epoch
+                return True
+            return False
+
+        improved = False
+        if self.mode == "max":
+            if current_score > (self.best_score + self.min_delta):
+                improved = True
+        else:
+            if current_score < (self.best_score - self.min_delta):
+                improved = True
+
+        if improved:
+            self.best_score = current_score
+            self.best_epoch = epoch
+            self.counter = 0
+            return True
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+            return False
+
+# ============================================================
+# 7. TRAINING & EVALUATION
 # ============================================================
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -258,6 +439,8 @@ def main():
     parser.add_argument("--convnext_name", type=str, default="convnext_base", help="Backbone ConvNeXt BASE (C4=1024)")
     parser.add_argument("--adapter_bottleneck", type=int, default=64, help="Bottleneck dimensi S-Adapter")
     parser.add_argument("--num_heads", type=int, default=12, help="Attention heads (768 / 12 = 64 head dim)")
+    parser.add_argument("--patience", type=int, default=5, help="Jumlah epoch toleransi Early Stopping (default: 5, set <= 0 untuk nonaktifkan)")
+    parser.add_argument("--min_delta", type=float, default=0.001, help="Peningkatan minimal AUC agar dihitung membaik (default: 0.001)")
     parser.add_argument("--save_dir", type=str, default="./checkpoints_base", help="Folder khusus menyimpan model Base")
     parser.add_argument("--workers", type=int, default=4 if os.name != 'nt' else 0)
     args = parser.parse_args()
@@ -276,17 +459,19 @@ def main():
         df_spoof = df[df.label == 0].sample(n=min(n_half, (df.label == 0).sum()), random_state=SEED)
         df = pd.concat([df_live, df_spoof]).reset_index(drop=True)
 
-    # Subject-Independent Splitting
+    # Subject-Independent Splitting: 70% Train, 15% Val, 15% Test
     subjs = list(df.subject.unique())
     if len(subjs) >= 3:
-        train_subjs, test_subjs = train_test_split(subjs, test_size=0.2, random_state=SEED)
-        train_subjs, val_subjs  = train_test_split(train_subjs, test_size=0.2, random_state=SEED)
+        # Step 1: Sisihkan 15% untuk Test Set
+        train_subjs, test_subjs = train_test_split(subjs, test_size=0.15, random_state=SEED)
+        # Step 2: Dari sisa 85%, ambil 15% total (15/85 ≈ 17.65%) untuk Validation Set -> sisa 70% Train
+        train_subjs, val_subjs  = train_test_split(train_subjs, test_size=(0.15 / 0.85), random_state=SEED)
         df_train = df[df.subject.isin(train_subjs)].reset_index(drop=True)
         df_val   = df[df.subject.isin(val_subjs)].reset_index(drop=True)
         df_test  = df[df.subject.isin(test_subjs)].reset_index(drop=True)
     else:
-        df_train, df_test = train_test_split(df, test_size=0.2, random_state=SEED)
-        df_train, df_val  = train_test_split(df_train, test_size=0.2, random_state=SEED)
+        df_train, df_test = train_test_split(df, test_size=0.15, random_state=SEED)
+        df_train, df_val  = train_test_split(df_train, test_size=(0.15 / 0.85), random_state=SEED)
 
     print(f"Data Split: Train={len(df_train):,} | Val={len(df_val):,} | Test={len(df_test):,}")
 
@@ -321,15 +506,47 @@ def main():
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    frozen_params = total_params - trainable_params
+    trainable_pct = 100 * trainable_params / total_params
     print(f"Total Parameter      : {total_params:,}")
-    print(f"Trainable Parameter  : {trainable_params:,} ({100 * trainable_params / total_params:.2f}%)")
+    print(f"Trainable Parameter  : {trainable_params:,} ({trainable_pct:.2f}%)")
+    print(f"Frozen Parameter     : {frozen_params:,} ({100 - trainable_pct:.2f}%)")
+
+    # [POINT 1]: Inisialisasi Logger & Simpan Konfigurasi Parameter Awal (Versi Base)
+    logger = TrainingLogger(save_dir=args.save_dir, experiment_name="HybridTokenSAdapterConvNeXt_BASE")
+    dataset_stats = {
+        "data_dir": args.data_dir,
+        "total_manifest": len(df),
+        "samples_mode": args.samples if args.samples > 0 else "Full",
+        "train_samples": len(df_train),
+        "val_samples": len(df_val),
+        "test_samples": len(df_test),
+        "device": str(DEVICE),
+        "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None (CPU)"
+    }
+    model_stats = {
+        "total_parameters": total_params,
+        "trainable_parameters": trainable_params,
+        "frozen_parameters": frozen_params,
+        "trainable_percentage": f"{trainable_pct:.2f}%"
+    }
+    logger.log_config(vars(args), model_stats, dataset_stats)
 
     criterion = FocalLoss(gamma=2.0, alpha=0.25)
     optimizer = get_optimizer(model, lr_adapter=args.lr_adapter, lr_head=args.lr_head)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
     best_val_auc = 0.0
+    best_epoch = 1
+    training_start_time = time.time()
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "val_auc": [], "val_hter": []}
+
+    # [POINT 2]: Inisialisasi Early Stopping (Versi Base)
+    early_stopping = EarlyStopping(patience=args.patience, min_delta=args.min_delta, mode="max")
+    if args.patience > 0:
+        print(f"[EARLY STOPPING AKTIF] Monitoring: val_auc | Patience: {args.patience} epoch | Min Delta: {args.min_delta}")
+    else:
+        print("[EARLY STOPPING NONAKTIF] Model akan dilatih penuh hingga batas epoch.")
 
     print("\n" + "="*75)
     print("MEMULAI PROSES TRAINING (VERSI BASE)")
@@ -340,6 +557,9 @@ def main():
         t0 = time.time()
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, DEVICE)
         val_metrics, _, _ = evaluate_epoch(model, val_loader, criterion, DEVICE)
+
+        lr_adapter = optimizer.param_groups[0]['lr']
+        lr_head = optimizer.param_groups[1]['lr'] if len(optimizer.param_groups) > 1 else lr_adapter
         scheduler.step()
         elapsed = time.time() - t0
 
@@ -350,15 +570,11 @@ def main():
         history["val_auc"].append(val_metrics["auc"])
         history["val_hter"].append(val_metrics["hter"])
 
-        print(
-            f"Epoch [{epoch:02d}/{args.epochs:02d}] ({elapsed:.1f}s) | "
-            f"Train Loss: {train_loss:.4f} Acc: {train_acc*100:.2f}% | "
-            f"Val Loss: {val_metrics['loss']:.4f} Acc: {val_metrics['accuracy']*100:.2f}% "
-            f"AUC: {val_metrics['auc']:.4f} HTER: {val_metrics['hter']*100:.2f}%"
-        )
-
-        if val_metrics["auc"] > best_val_auc:
+        # [POINT 2]: Pengecekan Peningkatan Performa melalui Early Stopping
+        is_best = early_stopping.check(val_metrics["auc"], epoch)
+        if is_best:
             best_val_auc = val_metrics["auc"]
+            best_epoch = epoch
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
@@ -368,7 +584,38 @@ def main():
                 "val_hter": val_metrics["hter"],
                 "arch": "HybridTokenSAdapterConvNeXt_BASE"
             }, best_ckpt_path)
-            print(f"  -> Checkpoint BASE terbaik disimpan di: {best_ckpt_path}")
+            print(f"  -> Checkpoint BASE terbaik disimpan di: {best_ckpt_path} (Rekor Baru AUC: {best_val_auc:.4f})")
+        else:
+            if args.patience > 0:
+                print(f"  -> [EarlyStopping] Tidak ada peningkatan selama {early_stopping.counter}/{args.patience} epoch (Rekor: {early_stopping.best_score:.4f} di Epoch {early_stopping.best_epoch})")
+
+        # [POINT 1]: Catat riwayat setiap epoch ke CSV & JSON
+        logger.log_epoch(
+            epoch=epoch,
+            elapsed=elapsed,
+            lr_adapter=lr_adapter,
+            lr_head=lr_head,
+            train_loss=train_loss,
+            train_acc=train_acc,
+            val_metrics=val_metrics,
+            is_best=is_best
+        )
+
+        print(
+            f"Epoch [{epoch:02d}/{args.epochs:02d}] ({elapsed:.1f}s) | "
+            f"Train Loss: {train_loss:.4f} Acc: {train_acc*100:.2f}% | "
+            f"Val Loss: {val_metrics['loss']:.4f} Acc: {val_metrics['accuracy']*100:.2f}% "
+            f"AUC: {val_metrics['auc']:.4f} HTER: {val_metrics['hter']*100:.2f}%"
+        )
+
+        # [POINT 2]: Evaluasi Kondisi Stop Dini
+        if early_stopping.early_stop:
+            print("\n" + "="*75)
+            print(f"[EARLY STOPPING TRIGGERED] Training dihentikan otomatis pada Epoch {epoch}!")
+            print(f"Alasan : Tidak ada peningkatan AUC lebih dari {args.min_delta} selama {args.patience} epoch berturut-turut.")
+            print(f"Model  : Checkpoint terbaik yang dimuat adalah Epoch {early_stopping.best_epoch} (AUC: {early_stopping.best_score:.4f}).")
+            print("="*75)
+            break
 
     # Evaluasi Final pada Test Set
     print("\n" + "="*75)
@@ -386,6 +633,17 @@ def main():
     print(f"APCER    : {test_metrics['apcer']*100:.2f}%")
     print(f"BPCER    : {test_metrics['bpcer']*100:.2f}%")
     print(f"HTER     : {test_metrics['hter']*100:.2f}%")
+
+    # [POINT 1 & 2]: Catat hasil akhir test set dan status Early Stopping ke final_test_summary.json
+    total_training_duration = time.time() - training_start_time
+    logger.log_final_results(
+        best_epoch=best_epoch,
+        best_val_auc=best_val_auc,
+        test_metrics=test_metrics,
+        total_duration=total_training_duration,
+        early_stopped=early_stopping.early_stop,
+        stopped_epoch=epoch
+    )
 
     # Simpan Grafik Training Khusus Base
     fig, axes = plt.subplots(1, 3, figsize=(16, 4))
@@ -408,10 +666,11 @@ def main():
     axes[2].legend()
 
     plt.tight_layout()
-    chart_path = "./training_history_token_hybrid_base.png"
-    plt.savefig(chart_path, dpi=150)
+    chart_ckpt_path = Path(args.save_dir) / "training_history_token_hybrid_base.png"
+    plt.savefig(chart_ckpt_path, dpi=150)
+    plt.savefig("./training_history_token_hybrid_base.png", dpi=150)
     plt.close()
-    print(f"[SUCCESS] Grafik training BASE disimpan di: {chart_path}")
+    print(f"[SUCCESS] Grafik training BASE disimpan di: {chart_ckpt_path} dan ./training_history_token_hybrid_base.png")
 
 if __name__ == "__main__":
     main()

@@ -45,25 +45,48 @@ def load_trained_model(checkpoint_path=DEFAULT_CHECKPOINT):
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.exists():
         print(f"[Error] File checkpoint {checkpoint_path} tidak ditemukan.")
-        print("Pastikan Anda telah menjalankan training terlebih dahulu:")
-        print("  python train_hybrid_token.py")
+        print("Pastikan file checkpoint tersedia di folder checkpoints/")
         sys.exit(1)
 
-    print(f"[Info] Memuat model arsitektur Hybrid Token S-Adapter dari: {checkpoint_path} ...")
-    model = HybridTokenSAdapterConvNeXt(
-        vit_name="vit_tiny_patch16_224",
-        convnext_name="convnext_tiny",
-        adapter_bottleneck=64,
-        num_classes=2,
-        pretrained=False,
-    ).to(DEVICE)
-
+    print(f"[Info] Memuat checkpoint dari: {checkpoint_path} ...")
     ckpt = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt.get("model_state", ckpt))
+
+    # Deteksi otomatis arsitektur: BASE vs TINY
+    arch = ckpt.get("arch", "")
+    is_base = "base" in str(checkpoint_path).lower() or "base" in arch.lower()
+
+    if is_base:
+        print("[Info] Arsitektur terdeteksi: BASE (ConvNeXt-Base + ViT-Base, 12 Heads)")
+        model = HybridTokenSAdapterConvNeXt(
+            vit_name="vit_base_patch16_224",
+            convnext_name="convnext_base",
+            adapter_bottleneck=64,
+            num_heads=12,
+            num_classes=2,
+            pretrained=False,
+        ).to(DEVICE)
+    else:
+        print("[Info] Arsitektur terdeteksi: TINY (ConvNeXt-Tiny + ViT-Tiny, 3 Heads)")
+        model = HybridTokenSAdapterConvNeXt(
+            vit_name="vit_tiny_patch16_224",
+            convnext_name="convnext_tiny",
+            adapter_bottleneck=64,
+            num_heads=3,
+            num_classes=2,
+            pretrained=False,
+        ).to(DEVICE)
+
     model.load_state_dict(state_dict)
     model.eval()
     epoch_info = ckpt.get("epoch", "N/A")
-    print(f"[Success] Model berhasil dimuat ke memori (Epoch: {epoch_info})!")
+    val_acc = ckpt.get("val_acc", None)
+    val_auc = ckpt.get("val_auc", None)
+    val_hter = ckpt.get("val_hter", None)
+    metric_str = ""
+    if val_acc is not None:
+        metric_str = f" | Acc: {val_acc*100:.2f}% | AUC: {val_auc:.4f} | HTER: {val_hter*100:.2f}%"
+    print(f"[Success] Model berhasil dimuat ke memori (Epoch: {epoch_info}{metric_str})!")
     return model
 
 def main():
