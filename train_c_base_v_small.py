@@ -219,7 +219,7 @@ class TrainingLogger:
                 "epoch", "elapsed_sec", "lr_adapter", "lr_head",
                 "train_loss", "train_acc",
                 "val_loss", "val_acc", "val_auc", "val_hter", "val_apcer", "val_bpcer",
-                "is_best"
+                "composite_score", "is_best"
             ])
 
     def log_config(self, args_dict: dict, model_stats: dict, dataset_stats: dict):
@@ -242,6 +242,7 @@ class TrainingLogger:
                 "epochs": args_dict.get("epochs"),
                 "lr_adapter": args_dict.get("lr_adapter"),
                 "lr_head": args_dict.get("lr_head"),
+                "early_stopping_metric": "CompositeScore (AUC + Acc - HTER - Loss)",
                 "early_stopping_patience": args_dict.get("patience"),
                 "early_stopping_min_delta": args_dict.get("min_delta"),
                 "early_stopping_enabled": args_dict.get("patience", 0) > 0,
@@ -258,14 +259,15 @@ class TrainingLogger:
         print(f"[LOGGER] Konfigurasi parameter disimpan di: {self.config_path}")
 
     def log_epoch(self, epoch: int, elapsed: float, lr_adapter: float, lr_head: float,
-                  train_loss: float, train_acc: float, val_metrics: dict, is_best: bool):
+                  train_loss: float, train_acc: float, val_metrics: dict,
+                  composite_score: float, is_best: bool):
         row = [
             epoch, f"{elapsed:.2f}", f"{lr_adapter:.6e}", f"{lr_head:.6e}",
             f"{train_loss:.4f}", f"{train_acc:.4f}",
             f"{val_metrics['loss']:.4f}", f"{val_metrics['accuracy']:.4f}",
             f"{val_metrics['auc']:.4f}", f"{val_metrics['hter']:.4f}",
             f"{val_metrics.get('apcer', 0.0):.4f}", f"{val_metrics.get('bpcer', 0.0):.4f}",
-            1 if is_best else 0
+            f"{composite_score:.4f}", 1 if is_best else 0
         ]
         with open(self.csv_path, mode="a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
@@ -285,6 +287,7 @@ class TrainingLogger:
             "val_hter": round(val_metrics["hter"], 4),
             "val_apcer": round(val_metrics.get("apcer", 0.0), 4),
             "val_bpcer": round(val_metrics.get("bpcer", 0.0), 4),
+            "composite_score": round(composite_score, 4),
             "is_best": is_best
         }
         self.records.append(record)
@@ -323,53 +326,57 @@ class TrainingLogger:
         print(f"[LOGGER] Log riwayat per-epoch lengkap CSV di: {self.csv_path}")
 
 # ============================================================
-# 6. EARLY STOPPING (POINT 2 GUIDANCE)
+# 6. EARLY STOPPING & BEST CHECKPOINT (MULTI-METRIC COMPOSITE)
 # ============================================================
 class EarlyStopping:
     """
-    Menangani Point 2: Early Stopping untuk memantau metrik (val_auc)
-    dan menghentikan training otomatis jika performa tidak kunjung membaik
-    setelah 'patience' epoch berturut-turut demi mencegah overfitting.
+    Menangani Point 2: Early Stopping & Best Checkpoint berbasis
+    Multi-Metric Composite Score:
+        Composite Score = AUC + Accuracy - HTER - Val Loss
+
+    Aturan:
+    1. is_best: True jika Skor Komposit melebihi rekor tertinggi absolut (> 0.0),
+       menjamin checkpoint yang disimpan di disk SELALU yang terbaik di semua metrik.
+    2. early_stop: True jika tidak ada peningkatan melebihi min_delta (default 0.0005)
+       selama 'patience' epoch berturut-turut.
     """
-    def __init__(self, patience: int = 5, min_delta: float = 0.001, mode: str = "max"):
+    def __init__(self, patience: int = 5, min_delta: float = 0.0005):
         self.patience = patience
         self.min_delta = min_delta
-        self.mode = mode
         self.counter = 0
-        self.best_score = -float("inf") if mode == "max" else float("inf")
+        self.best_score = -float("inf")
+        self.best_checkpoint_score = -float("inf")
         self.early_stop = False
         self.best_epoch = 1
 
-    def check(self, current_score: float, epoch: int) -> bool:
-        """
-        Mengecek apakah ada peningkatan skor melampaui min_delta.
-        Return True jika tercatat rekor baru (is_best), False jika tidak.
-        """
-        if self.patience <= 0:
-            if current_score > self.best_score:
-                self.best_score = current_score
-                self.best_epoch = epoch
-                return True
-            return False
+    def check(self, val_metrics: dict, epoch: int):
+        composite_score = (
+            val_metrics.get("auc", 0.0)
+            + val_metrics.get("accuracy", 0.0)
+            - val_metrics.get("hter", 0.0)
+            - val_metrics.get("loss", 0.0)
+        )
 
-        improved = False
-        if self.mode == "max":
-            if current_score > (self.best_score + self.min_delta):
-                improved = True
-        else:
-            if current_score < (self.best_score - self.min_delta):
-                improved = True
-
-        if improved:
-            self.best_score = current_score
+        # 1. Pengecekan simpan checkpoint: jika skor lebih tinggi sekecil apa pun (> 0.0)
+        is_best = False
+        if composite_score > self.best_checkpoint_score:
+            self.best_checkpoint_score = composite_score
             self.best_epoch = epoch
+            is_best = True
+
+        # 2. Pengecekan Early Stopping: butuh peningkatan signifikan melebihi min_delta
+        if self.patience <= 0:
+            return is_best, composite_score
+
+        if composite_score > (self.best_score + self.min_delta):
+            self.best_score = composite_score
             self.counter = 0
-            return True
         else:
             self.counter += 1
             if self.counter >= self.patience:
                 self.early_stop = True
-            return False
+
+        return is_best, composite_score
 
 # ============================================================
 # 7. TRAINING & EVALUATION (DENGAN AKSELERASI AMP MIXED PRECISION)
@@ -451,7 +458,7 @@ def main():
     parser.add_argument("--adapter_bottleneck", type=int, default=64, help="Bottleneck dimensi S-Adapter (tetap 64)")
     parser.add_argument("--num_heads", type=int, default=6, help="Attention heads (default: 6)")
     parser.add_argument("--patience", type=int, default=5, help="Jumlah epoch toleransi Early Stopping (default: 5)")
-    parser.add_argument("--min_delta", type=float, default=0.001, help="Peningkatan minimal AUC (default: 0.001)")
+    parser.add_argument("--min_delta", type=float, default=0.0005, help="Peningkatan minimal skor komposit agar tidak dihitung stagnan (default: 0.0005)")
     parser.add_argument("--save_dir", type=str, default="./checkpoints_c_base_v_small", help="Folder penyimpanan")
     parser.add_argument("--workers", type=int, default=4 if os.name != 'nt' else 0, help="Jumlah worker CPU DataLoader (default: 4 di Linux, hemat RAM)")
     args = parser.parse_args()
@@ -577,10 +584,10 @@ def main():
     training_start_time = time.time()
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "val_auc": [], "val_hter": []}
 
-    # [POINT 2]: Early Stopping
-    early_stopping = EarlyStopping(patience=args.patience, min_delta=args.min_delta, mode="max")
+    # [POINT 2]: Inisialisasi Early Stopping berbasis Multi-Metric Composite Score
+    early_stopping = EarlyStopping(patience=args.patience, min_delta=args.min_delta)
     if args.patience > 0:
-        print(f"[EARLY STOPPING AKTIF] Monitoring: val_auc | Patience: {args.patience} epoch | Min Delta: {args.min_delta}")
+        print(f"[EARLY STOPPING AKTIF] Monitoring: Composite Score (AUC + Acc - HTER - Loss) | Patience: {args.patience} epoch | Min Delta: {args.min_delta}")
     else:
         print("[EARLY STOPPING NONAKTIF] Model akan dilatih penuh hingga batas epoch.")
 
@@ -606,7 +613,8 @@ def main():
         history["val_auc"].append(val_metrics["auc"])
         history["val_hter"].append(val_metrics["hter"])
 
-        is_best = early_stopping.check(val_metrics["auc"], epoch)
+        # Pengecekan multi-metric composite score
+        is_best, composite_score = early_stopping.check(val_metrics, epoch)
         if is_best:
             best_val_auc = val_metrics["auc"]
             best_epoch = epoch
@@ -617,30 +625,34 @@ def main():
                 "val_auc": best_val_auc,
                 "val_acc": val_metrics["accuracy"],
                 "val_hter": val_metrics["hter"],
+                "val_loss": val_metrics["loss"],
+                "composite_score": composite_score,
                 "arch": "HybridToken_CBase_VSmall"
             }, best_ckpt_path)
-            print(f"  -> Checkpoint terbaik disimpan di: {best_ckpt_path} (Rekor Baru AUC: {best_val_auc:.4f})")
+            print(f"  -> Checkpoint terbaik disimpan di: {best_ckpt_path} (Rekor Baru Score: {composite_score:.4f} | AUC: {val_metrics['auc']:.4f} HTER: {val_metrics['hter']*100:.2f}% Acc: {val_metrics['accuracy']*100:.2f}%)")
         else:
             if args.patience > 0:
-                print(f"  -> [EarlyStopping] Tidak ada peningkatan selama {early_stopping.counter}/{args.patience} epoch (Rekor: {early_stopping.best_score:.4f} di Epoch {early_stopping.best_epoch})")
+                print(f"  -> [EarlyStopping] Tidak ada peningkatan > {args.min_delta} selama {early_stopping.counter}/{args.patience} epoch (Rekor Score: {early_stopping.best_score:.4f} di Epoch {early_stopping.best_epoch})")
 
         logger.log_epoch(
             epoch=epoch, elapsed=elapsed, lr_adapter=lr_adapter, lr_head=lr_head,
-            train_loss=train_loss, train_acc=train_acc, val_metrics=val_metrics, is_best=is_best
+            train_loss=train_loss, train_acc=train_acc, val_metrics=val_metrics,
+            composite_score=composite_score, is_best=is_best
         )
 
         print(
             f"Epoch [{epoch:02d}/{args.epochs:02d}] ({elapsed:.1f}s) | "
             f"Train Loss: {train_loss:.4f} Acc: {train_acc*100:.2f}% | "
             f"Val Loss: {val_metrics['loss']:.4f} Acc: {val_metrics['accuracy']*100:.2f}% "
-            f"AUC: {val_metrics['auc']:.4f} HTER: {val_metrics['hter']*100:.2f}%"
+            f"AUC: {val_metrics['auc']:.4f} HTER: {val_metrics['hter']*100:.2f}% | "
+            f"Score: {composite_score:.4f}"
         )
 
         if early_stopping.early_stop:
             print("\n" + "="*75)
             print(f"[EARLY STOPPING TRIGGERED] Training dihentikan otomatis pada Epoch {epoch}!")
-            print(f"Alasan : Tidak ada peningkatan AUC lebih dari {args.min_delta} selama {args.patience} epoch berturut-turut.")
-            print(f"Model  : Checkpoint terbaik yang dimuat adalah Epoch {early_stopping.best_epoch} (AUC: {early_stopping.best_score:.4f}).")
+            print(f"Alasan : Tidak ada peningkatan Skor Komposit lebih dari {args.min_delta} selama {args.patience} epoch berturut-turut.")
+            print(f"Model  : Checkpoint terbaik yang dimuat adalah Epoch {early_stopping.best_epoch} (Score: {early_stopping.best_checkpoint_score:.4f}).")
             print("="*75)
             break
 
