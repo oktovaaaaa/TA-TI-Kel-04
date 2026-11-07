@@ -459,7 +459,7 @@ def main():
     parser.add_argument("--num_heads", type=int, default=12, help="Attention heads (default: 12)")
     parser.add_argument("--patience", type=int, default=5, help="Jumlah epoch toleransi Early Stopping (default: 5)")
     parser.add_argument("--min_delta", type=float, default=0.0005, help="Peningkatan minimal skor komposit agar tidak dihitung stagnan (default: 0.0005)")
-    parser.add_argument("--save_dir", type=str, default="./checkpoints_base", help="Folder penyimpanan")
+    parser.add_argument("--save_dir", type=str, default="./checkpoints_c_base_v_base", help="Folder penyimpanan")
     parser.add_argument("--workers", type=int, default=4 if os.name != 'nt' else 0, help="Jumlah worker CPU DataLoader (default: 4 di Linux, hemat RAM)")
     args = parser.parse_args()
 
@@ -594,7 +594,7 @@ def main():
     print("\n" + "="*75)
     print("MEMULAI PROSES TRAINING (ConvNeXt-Base + ViT-Base)")
     print("="*75)
-    best_ckpt_path = Path(args.save_dir) / "best_token_hybrid_base_model.pth"
+    best_ckpt_path = Path(args.save_dir) / "best_token_hybrid_c_base_v_base.pth"
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
@@ -700,11 +700,11 @@ def main():
     axes[2].legend()
 
     plt.tight_layout()
-    chart_ckpt_path = Path(args.save_dir) / "training_history_token_hybrid_base.png"
+    chart_ckpt_path = Path(args.save_dir) / "training_history_c_base_v_base.png"
     plt.savefig(chart_ckpt_path, dpi=150)
-    plt.savefig("./training_history_token_hybrid_base.png", dpi=150)
+    plt.savefig("./training_history_c_base_v_base.png", dpi=150)
     plt.close()
-    print(f"[SUCCESS] Grafik training disimpan di: {chart_ckpt_path} dan ./training_history_token_hybrid_base.png")
+    print(f"[SUCCESS] Grafik training disimpan di: {chart_ckpt_path} dan ./training_history_c_base_v_base.png")
 
 if __name__ == "__main__":
     main()
