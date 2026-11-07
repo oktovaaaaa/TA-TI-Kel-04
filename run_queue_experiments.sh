@@ -28,37 +28,37 @@ fi
 # Antrean 1: ConvNeXt-Tiny + ViT-Small
 echo ""
 echo ">>> [1/7] Menjalankan: ConvNeXt-Tiny + ViT-Small ..."
-python train_c_tiny_v_small.py --epochs 25 --patience 5 --batch_size 64 --workers 4
+python train_c_tiny_v_small.py --epochs 25 --patience 5 --batch_size 64 --workers 8
 
 # Antrean 2: ConvNeXt-Tiny + ViT-Base
 echo ""
 echo ">>> [2/7] Menjalankan: ConvNeXt-Tiny + ViT-Base ..."
-python train_c_tiny_v_base.py --epochs 25 --patience 5 --batch_size 64 --workers 4
+python train_c_tiny_v_base.py --epochs 25 --patience 5 --batch_size 64 --workers 8
 
 # Antrean 3: ConvNeXt-Small + ViT-Tiny
 echo ""
 echo ">>> [3/7] Menjalankan: ConvNeXt-Small + ViT-Tiny ..."
-python train_c_small_v_tiny.py --epochs 25 --patience 5 --batch_size 64 --workers 4
+python train_c_small_v_tiny.py --epochs 25 --patience 5 --batch_size 64 --workers 8
 
 # Antrean 4: ConvNeXt-Small + ViT-Small
 echo ""
 echo ">>> [4/7] Menjalankan: ConvNeXt-Small + ViT-Small ..."
-python train_c_small_v_small.py --epochs 25 --patience 5 --batch_size 64 --workers 4
+python train_c_small_v_small.py --epochs 25 --patience 5 --batch_size 64 --workers 8
 
 # Antrean 5: ConvNeXt-Small + ViT-Base
 echo ""
 echo ">>> [5/7] Menjalankan: ConvNeXt-Small + ViT-Base ..."
-python train_c_small_v_base.py --epochs 25 --patience 5 --batch_size 64 --workers 4
+python train_c_small_v_base.py --epochs 25 --patience 5 --batch_size 64 --workers 8
 
 # Antrean 6: ConvNeXt-Base + ViT-Tiny
 echo ""
 echo ">>> [6/7] Menjalankan: ConvNeXt-Base + ViT-Tiny ..."
-python train_c_base_v_tiny.py --epochs 25 --patience 5 --batch_size 64 --workers 4
+python train_c_base_v_tiny.py --epochs 25 --patience 5 --batch_size 64 --workers 8
 
 # Antrean 7: ConvNeXt-Base + ViT-Small
 echo ""
 echo ">>> [7/7] Menjalankan: ConvNeXt-Base + ViT-Small ..."
-python train_c_base_v_small.py --epochs 25 --patience 5 --batch_size 64 --workers 4
+python train_c_base_v_small.py --epochs 25 --patience 5 --batch_size 64 --workers 8
 
 echo ""
 echo "===================================================================="
