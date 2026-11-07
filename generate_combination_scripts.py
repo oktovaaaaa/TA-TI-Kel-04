@@ -132,6 +132,21 @@ CONFIGS = [
         "desc_v": "ViT-Small (Patch 16x16 -> 196 tokens -> S-Adapter -> Tv 196x384)",
         "desc_f": "Bidirectional Cross-Attention (6 Heads) -> Tr 245x384 -> Refinement",
         "desc_cls": "Global Pooling (384) -> Linear(384 -> 256) -> ReLU -> Dropout -> Linear(256 -> 2)"
+    },
+    {
+        "filename": "train_c_base_v_base.py",
+        "title": "ConvNeXt-Base + ViT-Base",
+        "exp_name": "HybridToken_CBase_VBase",
+        "convnext": "convnext_base",
+        "vit": "vit_base_patch16_224",
+        "num_heads": 12,
+        "save_dir": "./checkpoints_base",
+        "ckpt_name": "best_token_hybrid_base_model.pth",
+        "chart_name": "training_history_token_hybrid_base.png",
+        "desc_c": "ConvNeXt-Base (Stage 4 C4=1024 -> TSR -> Tc 49x768)",
+        "desc_v": "ViT-Base (Patch 16x16 -> 196 tokens -> S-Adapter -> Tv 196x768)",
+        "desc_f": "Bidirectional Cross-Attention (12 Heads) -> Tr 245x768 -> Refinement",
+        "desc_cls": "Global Pooling (768) -> Linear(768 -> 256) -> ReLU -> Dropout -> Linear(256 -> 2)"
     }
 ]
 
