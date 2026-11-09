@@ -168,29 +168,51 @@ def load_trained_model(checkpoint_path):
     ckpt = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt.get("model_state", ckpt))
 
+    # Deteksi otomatis arsitektur 9 kombinasi model
     arch = ckpt.get("arch", "")
-    is_base = "base" in str(checkpoint_path).lower() or "base" in arch.lower()
+    cfg_file = checkpoint_path.parent / "training_config.json"
 
-    if is_base:
-        print("      -> Arsitektur: BASE (ConvNeXt-Base + ViT-Base, 12 Heads)")
-        model = HybridTokenSAdapterConvNeXt(
-            vit_name="vit_base_patch16_224",
-            convnext_name="convnext_base",
-            adapter_bottleneck=64,
-            num_heads=12,
-            num_classes=2,
-            pretrained=False,
-        ).to(DEVICE)
+    vit_name = "vit_tiny_patch16_224"
+    convnext_name = "convnext_tiny"
+    num_heads = 3
+
+    if cfg_file.exists():
+        try:
+            with open(cfg_file, "r") as f:
+                cfg = json.load(f).get("model_architecture", {})
+                vit_name = cfg.get("vit_name", vit_name)
+                convnext_name = cfg.get("convnext_name", convnext_name)
+                num_heads = cfg.get("num_heads", num_heads)
+        except Exception:
+            pass
     else:
-        print("      -> Arsitektur: TINY (ConvNeXt-Tiny + ViT-Tiny, 3 Heads)")
-        model = HybridTokenSAdapterConvNeXt(
-            vit_name="vit_tiny_patch16_224",
-            convnext_name="convnext_tiny",
-            adapter_bottleneck=64,
-            num_heads=3,
-            num_classes=2,
-            pretrained=False,
-        ).to(DEVICE)
+        path_str = str(checkpoint_path).lower()
+        if "c_small" in path_str:
+            convnext_name = "convnext_small"
+        elif "c_base" in path_str or "base" in path_str:
+            convnext_name = "convnext_base"
+        else:
+            convnext_name = "convnext_tiny"
+
+        if "v_small" in path_str:
+            vit_name = "vit_small_patch16_224"
+            num_heads = 6
+        elif "v_base" in path_str or "base" in path_str:
+            vit_name = "vit_base_patch16_224"
+            num_heads = 12
+        else:
+            vit_name = "vit_tiny_patch16_224"
+            num_heads = 3
+
+    print(f"      -> Arsitektur: {convnext_name} + {vit_name} ({num_heads} Heads)")
+    model = HybridTokenSAdapterConvNeXt(
+        vit_name=vit_name,
+        convnext_name=convnext_name,
+        adapter_bottleneck=64,
+        num_heads=num_heads,
+        num_classes=2,
+        pretrained=False,
+    ).to(DEVICE)
 
     model.load_state_dict(state_dict)
     model.eval()
