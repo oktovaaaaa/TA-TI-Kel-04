@@ -586,7 +586,7 @@ def main():
         # [POINT 2]: Pengecekan Peningkatan Performa melalui Early Stopping
         is_best = early_stopping.check(val_metrics["auc"], epoch)
         if is_best:
-            best_val_auc = val_metrics["auc"]
+            best_val_auc = val_metrics["auc"]   
             best_epoch = epoch
             torch.save({
                 "epoch": epoch,

@@ -18,12 +18,18 @@ NUAA/
 *.tar.gz
 *.7z
 
-# Checkpoint model weights (> 100MB exceeds GitHub push limit)
+# Checkpoint model weights & folders (> 100MB exceeds GitHub push limit)
 checkpoints/*
 !checkpoints/.gitkeep
+checkpoints_*/
 *.pth
 *.pt
 *.onnx
+*.tflite
+!blaze_face_short_range.tflite
+
+# External raw source clones
+Test_Live/
 
 # Jupyter Notebook Checkpoints
 .ipynb_checkpoints/
