@@ -45,3 +45,4 @@ echo "============================================================"
 echo "SEMUA PELATIHAN VIT SELESAI DENGAN SUKSES!"
 echo "Waktu selesai: $(date)"
 echo "============================================================"
+

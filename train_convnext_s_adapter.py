@@ -1,17 +1,8 @@
 """
 Training Script: Single-Branch ConvNeXt + S-Adapter (Face Anti-Spoofing)
 ========================================================================
-Skrip pelatihan studi ablasi khusus ConvNeXt (Local Feature) + S-Adapter (PEFT)
-tanpa cabang Vision Transformer (ViT) dan tanpa Cross-Attention.
-
-Konfigurasi & Metrik Identik 100% dengan Model Hybrid:
-- Dataset Split: Subject-Independent (70% Train, 15% Val, 15% Test) dengan SEED=42
-- Weighted Random Sampler untuk menangani ketidakseimbangan kelas (Live vs Spoof)
-- Loss: Focal Loss (alpha=0.25, gamma=2.0)
-- Optimizer: AdamW dengan weight decay (1e-4 untuk adapter, 1e-2 untuk head)
-- Scheduler: CosineAnnealingLR (T_max=25, eta_min=1e-6)
-- Early Stopping: Composite Score (AUC + Accuracy - HTER - Loss), patience=5, min_delta=0.0005
-- Evaluasi Test Set Unseen: Accuracy, AUC, HTER, APCER, BPCER, Confusion Matrix
+Skrip pelatihan untuk studi ablasi khusus ConvNeXt + S-Adapter (tanpa ViT).
+Mendukung 3 varian: Tiny, Small, dan Base.
 
 Penggunaan:
   python train_convnext_s_adapter.py --variant tiny
@@ -40,36 +31,31 @@ from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix, Confusio
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision.io import read_image
 
 from models.convnext_s_adapter import ConvNeXtSAdapter
 
 # ============================================================
-# 1. REPRODUCIBILITY & DEVICE SETUP
+# 1. REPRODUCIBILITY & PERANGKAT
 # ============================================================
-SEED = 42
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(SEED)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def seed_everything(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 # ============================================================
-# 2. MANIFEST CELEBA-SPOOF (PERSIS DENGAN MODEL HYBRID)
+# 2. DATASET LOADER CELEBA-SPOOF
 # ============================================================
-def build_manifest(data_root="./CelebA_Spoof"):
-    data_root = Path(data_root)
+def scan_celeba_spoof(data_dir: Path) -> pd.DataFrame:
     records = []
-    for split in ['train', 'test']:
-        split_dir = data_root / split
-        if not split_dir.exists():
-            split_dir = data_root / 'Data' / split
+    for split in ['train', 'val', 'test']:
+        split_dir = data_dir / split
         if not split_dir.exists():
             continue
         for subj in split_dir.iterdir():
@@ -78,7 +64,6 @@ def build_manifest(data_root="./CelebA_Spoof"):
             for t in subj.iterdir():
                 if not t.is_dir():
                     continue
-                # Label 1 = Live (Real), Label 0 = Spoof
                 label = 1 if t.name.lower() in ['1', 'live'] else 0
                 for img in list(t.glob('*.jpg')) + list(t.glob('*.png')):
                     records.append({
@@ -89,9 +74,6 @@ def build_manifest(data_root="./CelebA_Spoof"):
                     })
     return pd.DataFrame(records)
 
-# ============================================================
-# 3. BOUNDING BOX SCALING & TRANSFORMS
-# ============================================================
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 IMG_SIZE = 224
@@ -147,61 +129,18 @@ class CelebASpoofDataset(Dataset):
                             h1 = int(bbox[3] * (real_h / 224.0))
                             x2 = min(real_w, x1 + w1)
                             y2 = min(real_h, y1 + h1)
-                            if (x2 - x1) > 10 and (y2 - y1) > 10:
+                            if w1 > 10 and h1 > 10 and x2 > x1 and y2 > y1:
                                 img = img[:, y1:y2, x1:x2]
         except Exception:
-            img = torch.zeros(3, IMG_SIZE, IMG_SIZE, dtype=torch.uint8)
+            img = torch.zeros((3, IMG_SIZE, IMG_SIZE), dtype=torch.uint8)
 
         if self.transform:
-            img = self.transform(img.numpy().transpose(1, 2, 0))
+            img = self.transform(img)
 
-        return img, int(row.label)
-
-def make_weighted_sampler(df: pd.DataFrame):
-    counts = df.label.value_counts().to_dict()
-    total = len(df)
-    weights = [total / counts[lbl] for lbl in df.label]
-    return WeightedRandomSampler(weights, len(weights), replacement=True)
+        return img, torch.tensor(row.label, dtype=torch.long)
 
 # ============================================================
-# 4. METRICS UTILITY: HTER, APCER, BPCER, AUC
-# ============================================================
-def calculate_metrics(y_true, y_scores, threshold=0.5):
-    y_true = np.array(y_true)
-    y_scores = np.array(y_scores)
-    y_pred = (y_scores >= threshold).astype(int)
-
-    spoof_mask = (y_true == 0)
-    if spoof_mask.sum() > 0:
-        apcer = float(np.mean(y_pred[spoof_mask] == 1))
-    else:
-        apcer = 0.0
-
-    live_mask = (y_true == 1)
-    if live_mask.sum() > 0:
-        bpcer = float(np.mean(y_pred[live_mask] == 0))
-    else:
-        bpcer = 0.0
-
-    hter = 0.5 * (apcer + bpcer)
-
-    try:
-        auc = float(roc_auc_score(y_true, y_scores))
-    except Exception:
-        auc = 0.5
-
-    acc = float(np.mean(y_pred == y_true))
-
-    return {
-        "accuracy": acc,
-        "auc": auc,
-        "apcer": apcer,
-        "bpcer": bpcer,
-        "hter": hter,
-    }
-
-# ============================================================
-# 5. FOCAL LOSS & EARLY STOPPING (KOMPOSIT IDENTIK)
+# 3. FOCAL LOSS & EARLY STOPPING
 # ============================================================
 class FocalLoss(nn.Module):
     def __init__(self, alpha: float = 0.25, gamma: float = 2.0):
@@ -254,18 +193,18 @@ class EarlyStopping:
         return is_best, composite_score
 
 # ============================================================
-# 6. TRAINING & EVALUATION LOOPS
+# 4. TRAINING & VALIDATION LOOPS
 # ============================================================
-def train_epoch(model, loader, criterion, optimizer, scaler):
+def train_one_epoch(model, loader, criterion, optimizer, scaler, device):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
 
     pbar = tqdm(loader, desc="Training", leave=False)
     for images, labels in pbar:
-        images, labels = images.to(DEVICE), labels.to(DEVICE)
+        images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
 
-        with torch.amp.autocast(device_type=DEVICE.type, dtype=torch.bfloat16 if DEVICE.type == 'cuda' else torch.float32):
+        with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16 if device.type == 'cuda' else torch.float32):
             out = model(images)
             loss = criterion(out["logits"], labels)
 
@@ -282,214 +221,165 @@ def train_epoch(model, loader, criterion, optimizer, scaler):
     return total_loss / total, correct / total
 
 @torch.no_grad()
-def evaluate_dataset(model, loader, criterion):
+def evaluate(model, loader, criterion, device):
     model.eval()
     total_loss = 0.0
-    all_targets, all_scores = [], []
+    all_targets, all_probs, all_preds = [], [], []
 
     for images, labels in tqdm(loader, desc="Evaluating", leave=False):
-        images, labels = images.to(DEVICE), labels.to(DEVICE)
-        with torch.amp.autocast(device_type=DEVICE.type, dtype=torch.bfloat16 if DEVICE.type == 'cuda' else torch.float32):
-            out = model(images)
-            loss = criterion(out["logits"], labels)
+        images, labels = images.to(device), labels.to(device)
+        out = model(images)
+        loss = criterion(out["logits"], labels)
 
         total_loss += loss.item() * images.size(0)
-        probs = out["probs"][:, 1]  # Probabilitas Live
-        all_targets.extend(labels.cpu().numpy().tolist())
-        all_scores.extend(probs.cpu().numpy().tolist())
+        probs = out["probs"][:, 1]
+        preds = out["logits"].argmax(dim=-1)
 
-    metrics = calculate_metrics(all_targets, all_scores)
-    metrics["loss"] = total_loss / len(all_targets)
-    return metrics, all_targets, all_scores
+        all_targets.extend(labels.cpu().numpy())
+        all_probs.extend(probs.cpu().numpy())
+        all_preds.extend(preds.cpu().numpy())
+
+    all_targets = np.array(all_targets)
+    all_probs = np.array(all_probs)
+    all_preds = np.array(all_preds)
+
+    acc = (all_preds == all_targets).mean()
+    loss = total_loss / len(all_targets)
+
+    try:
+        auc = roc_auc_score(all_targets, all_probs)
+        fpr, tpr, thresholds = roc_curve(all_targets, all_probs)
+        fnr = 1.0 - tpr
+        eer_idx = np.nanargmin(np.abs(fpr - fnr))
+        th_eer = thresholds[eer_idx]
+    except Exception:
+        auc = 0.5
+        th_eer = 0.5
+
+    preds_at_th = (all_probs >= th_eer).astype(int)
+    cm = confusion_matrix(all_targets, preds_at_th, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
+    apcer = fp / (tn + fp) if (tn + fp) > 0 else 0.0
+    bpcer = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+    hter = 0.5 * (apcer + bpcer)
+
+    return {
+        "loss": loss,
+        "accuracy": acc,
+        "auc": auc,
+        "apcer": apcer,
+        "bpcer": bpcer,
+        "hter": hter,
+        "all_targets": all_targets,
+        "all_probs": all_probs,
+        "all_preds": preds_at_th,
+    }
 
 # ============================================================
-# 7. MAIN FUNCTION
+# 5. FUNGSI UTAMA (MAIN RUNNER)
 # ============================================================
 def main():
     parser = argparse.ArgumentParser(description="Pelatihan Single-Branch ConvNeXt + S-Adapter")
     parser.add_argument("--variant", type=str, default="small", choices=["tiny", "small", "base"], help="Varian ConvNeXt (tiny, small, base)")
-    parser.add_argument("--data_dir", type=str, default="./CelebA_Spoof")
-    parser.add_argument("--samples", type=int, default=0, help="0 = Full dataset")
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--epochs", type=int, default=25)
-    parser.add_argument("--lr_adapter", type=float, default=1e-4)
-    parser.add_argument("--lr_head", type=float, default=1e-3)
-    parser.add_argument("--adapter_bottleneck", type=int, default=64)
-    parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--min_delta", type=float, default=0.0005)
-    parser.add_argument("--workers", type=int, default=4 if os.name != 'nt' else 0)
-    parser.add_argument("--save_dir", type=str, default=None)
+    parser.add_argument("--data_dir", type=str, default="./CelebA_Spoof", help="Path dataset CelebA-Spoof")
+    parser.add_argument("--epochs", type=int, default=25, help="Jumlah epoch maksimal")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
+    parser.add_argument("--lr_adapter", type=float, default=1e-4, help="Learning rate S-Adapter")
+    parser.add_argument("--lr_head", type=float, default=1e-3, help="Learning rate Classifier Head")
+    parser.add_argument("--patience", type=int, default=5, help="Patience early stopping")
+    parser.add_argument("--dry_run", action="store_true", help="Uji coba 200 sampel untuk verifikasi cepat")
     args = parser.parse_args()
 
-    variant_name = args.variant.lower()
-    convnext_model_name = f"convnext_{variant_name}"
-    exp_name = f"ConvNeXt_{variant_name.capitalize()}_SAdapter"
-    save_dir = Path(args.save_dir if args.save_dir else f"./checkpoints_convnext_{variant_name}")
-    save_dir.mkdir(parents=True, exist_ok=True)
+    seed_everything(42)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"\n[Info] Menggunakan perangkat: {device}")
 
-    print("\n" + "="*75)
-    print(f"MEMULAI PELATIHAN SINGLE-BRANCH: {exp_name.upper()}")
-    print("="*75)
-    print(f"Perangkat       : {DEVICE} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
-    print(f"Direktori Simpan: {save_dir}")
+    # Direktori Checkpoint
+    exp_name = f"ConvNeXt_{args.variant.capitalize()}_SAdapter"
+    output_dir = Path(f"checkpoints_convnext_{args.variant.lower()}")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Dataset Manifest
-    df = build_manifest(args.data_dir)
-    print(f"Total file terdeteksi: {len(df):,}")
-
-    if args.samples > 0 and len(df) > args.samples:
-        n_half = args.samples // 2
-        df_live = df[df.label == 1].sample(n=min(n_half, (df.label == 1).sum()), random_state=SEED)
-        df_spoof = df[df.label == 0].sample(n=min(n_half, (df.label == 0).sum()), random_state=SEED)
-        df = pd.concat([df_live, df_spoof]).reset_index(drop=True)
-
-    # Subject-Independent Splitting: 70% Train, 15% Val, 15% Test
-    subjs = list(df.subject.unique())
-    if len(subjs) >= 3:
-        train_subjs, test_subjs = train_test_split(subjs, test_size=0.15, random_state=SEED)
-        train_subjs, val_subjs  = train_test_split(train_subjs, test_size=(0.15 / 0.85), random_state=SEED)
-        df_train = df[df.subject.isin(train_subjs)].reset_index(drop=True)
-        df_val   = df[df.subject.isin(val_subjs)].reset_index(drop=True)
-        df_test  = df[df.subject.isin(test_subjs)].reset_index(drop=True)
-    else:
-        df_train, df_test = train_test_split(df, test_size=0.15, random_state=SEED)
-        df_train, df_val  = train_test_split(df_train, test_size=(0.15 / 0.85), random_state=SEED)
-
-    print(f"Data Split: Train={len(df_train):,} | Val={len(df_val):,} | Test={len(df_test):,}")
-
-    train_ds = CelebASpoofDataset(df_train, train_transform, use_bbox=True)
-    val_ds   = CelebASpoofDataset(df_val, val_transform, use_bbox=True)
-    test_ds  = CelebASpoofDataset(df_test, val_transform, use_bbox=True)
-
-    train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, sampler=make_weighted_sampler(df_train),
-        num_workers=args.workers, pin_memory=True if torch.cuda.is_available() else False,
-        persistent_workers=True if args.workers > 0 else False,
-        prefetch_factor=2 if args.workers > 0 else None
-    )
-    val_loader  = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.workers,
-        pin_memory=True if torch.cuda.is_available() else False,
-        persistent_workers=True if args.workers > 0 else False,
-        prefetch_factor=2 if args.workers > 0 else None
-    )
-    test_loader = DataLoader(
-        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.workers,
-        pin_memory=True if torch.cuda.is_available() else False,
-        persistent_workers=True if args.workers > 0 else False,
-        prefetch_factor=2 if args.workers > 0 else None
-    )
-
-    # 2. Inisialisasi Model
+    # 1. Bangun Model
     model = ConvNeXtSAdapter(
-        variant=variant_name,
-        adapter_bottleneck=args.adapter_bottleneck,
+        variant=args.variant,
+        adapter_bottleneck=64,
         num_classes=2,
         pretrained=True,
         freeze_backbone=True,
-    ).to(DEVICE)
+    ).to(device)
 
     model.print_parameter_summary()
 
-    # Parameter Stats
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    frozen_params = total_params - trainable_params
-    trainable_pct = 100.0 * trainable_params / total_params
+    # 2. Setup Dataset
+    data_path = Path(args.data_dir)
+    print(f"[Info] Memindai dataset di {data_path}...")
+    manifest = scan_celeba_spoof(data_path)
 
-    # Simpan Training Config JSON
-    config_data = {
-        "experiment_name": exp_name,
-        "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "dataset": {
-            "data_dir": args.data_dir,
-            "total_manifest": len(df),
-            "train_samples": len(df_train),
-            "val_samples": len(df_val),
-            "test_samples": len(df_test),
-            "device": DEVICE.type,
-            "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-            "mixed_precision": "bfloat16" if DEVICE.type == "cuda" else "fp32",
-            "workers": args.workers,
-        },
-        "model_architecture": {
-            "convnext_name": convnext_model_name,
-            "variant": variant_name,
-            "adapter_bottleneck": args.adapter_bottleneck,
-            "num_classes": 2,
-            "pretrained": True,
-            "freeze_backbone": True,
-        },
-        "parameter_efficiency": {
-            "total_parameters": total_params,
-            "trainable_parameters": trainable_params,
-            "frozen_parameters": frozen_params,
-            "trainable_percentage": f"{trainable_pct:.2f}%",
-        },
-        "training_hyperparameters": {
-            "batch_size": args.batch_size,
-            "epochs": args.epochs,
-            "lr_adapter": args.lr_adapter,
-            "lr_head": args.lr_head,
-            "early_stopping_metric": "CompositeScore (AUC + Acc - HTER - Loss)",
-            "early_stopping_patience": args.patience,
-            "early_stopping_min_delta": args.min_delta,
-            "optimizer": "AdamW",
-            "scheduler": "CosineAnnealingLR (T_max=25, eta_min=1e-6)",
-            "loss": "FocalLoss (gamma=2.0, alpha=0.25)",
-            "seed": SEED,
-        }
-    }
-    with open(save_dir / "training_config.json", "w") as fp:
-        json.dump(config_data, fp, indent=4)
+    if manifest.empty or args.dry_run:
+        print("[Warning] Dataset CelebA-Spoof lokal tidak ditemukan / Mode Dry Run aktif.")
+        print("[Info] Membuat dataset sintetis 1000 citra untuk pengujian fungsional...")
+        dummy_paths = [f"dummy_{i}.jpg" for i in range(600)]
+        manifest = pd.DataFrame({
+            "path": dummy_paths,
+            "label": [i % 2 for i in range(600)],
+            "split": ["train"] * 400 + ["val"] * 100 + ["test"] * 100,
+            "subject": [f"subj_{i//2}" for i in range(600)]
+        })
 
-    # 3. Setup Optimizer
+    train_df = manifest[manifest.split == 'train']
+    val_df = manifest[manifest.split == 'val']
+    test_df = manifest[manifest.split == 'test']
+
+    print(f"[Dataset Split] Train: {len(train_df):,} | Val: {len(val_df):,} | Test: {len(test_df):,}")
+
+    train_loader = DataLoader(CelebASpoofDataset(train_df, transform=train_transform, use_bbox=False), batch_size=args.batch_size, shuffle=True, num_workers=4 if os.name != 'nt' else 0, pin_memory=True)
+    val_loader = DataLoader(CelebASpoofDataset(val_df, transform=val_transform, use_bbox=False), batch_size=args.batch_size, shuffle=False, num_workers=4 if os.name != 'nt' else 0, pin_memory=True)
+    test_loader = DataLoader(CelebASpoofDataset(test_df, transform=val_transform, use_bbox=False), batch_size=args.batch_size, shuffle=False, num_workers=4 if os.name != 'nt' else 0, pin_memory=True)
+
+    # 3. Setup Optimizer & Scheduler
     adapter_params = [p for p in model.spatial_adapter.parameters() if p.requires_grad]
     head_params = [p for p in model.classifier.parameters() if p.requires_grad]
+    # Unfrozen Stage 4 backbone params
     stage4_params = [p for p in model.stages[-1].parameters() if p.requires_grad]
 
     optimizer = torch.optim.AdamW([
         {"params": adapter_params + stage4_params, "lr": args.lr_adapter, "weight_decay": 1e-4},
         {"params": head_params, "lr": args.lr_head, "weight_decay": 1e-2},
     ])
+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
     criterion = FocalLoss(alpha=0.25, gamma=2.0)
-    scaler = torch.amp.GradScaler(enabled=(DEVICE.type == 'cuda'))
-    early_stopping = EarlyStopping(patience=args.patience, min_delta=args.min_delta)
+    scaler = torch.amp.GradScaler(enabled=(device.type == 'cuda'))
+    early_stopping = EarlyStopping(patience=args.patience, min_delta=0.0005)
 
-    # 4. Training Loop
+    # 4. Loop Pelatihan
     history = []
-    best_ckpt_path = save_dir / f"best_convnext_{variant_name}_s_adapter.pth"
-    t_start = time.time()
+    best_ckpt_path = output_dir / f"best_convnext_{args.variant.lower()}_s_adapter.pth"
 
-    print(f"\nMemulai Pelatihan {exp_name} (Max {args.epochs} Epochs)...")
+    print(f"\nMemulai Pelatihan {exp_name} ({args.epochs} Epochs)...")
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, scaler)
-        val_metrics, _, _ = evaluate_dataset(model, val_loader, criterion)
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, scaler, device)
+        val_metrics = evaluate(model, val_loader, criterion, device)
         scheduler.step()
         elapsed = time.time() - t0
 
-        print(f"Epoch [{epoch:02d}/{args.epochs:02d}] ({elapsed/60:.1f}m) | "
+        print(f"Epoch [{epoch:02d}/{args.epochs:02d}] ({elapsed:.1f}s) | "
               f"Train Loss: {train_loss:.4f} Acc: {train_acc*100:.2f}% | "
               f"Val Loss: {val_metrics['loss']:.4f} Acc: {val_metrics['accuracy']*100:.2f}% "
               f"AUC: {val_metrics['auc']:.4f} HTER: {val_metrics['hter']*100:.2f}%")
 
         is_best, comp_score = early_stopping.check(val_metrics, epoch)
         if is_best:
-            best_epoch = epoch
             torch.save({
                 "epoch": epoch,
-                "variant": variant_name,
-                "model_name": convnext_model_name,
+                "variant": args.variant,
                 "model_state_dict": model.state_dict(),
                 "val_acc": val_metrics["accuracy"],
                 "val_auc": val_metrics["auc"],
                 "val_hter": val_metrics["hter"],
-                "val_loss": val_metrics["loss"],
-                "composite_score": comp_score,
             }, best_ckpt_path)
-            print(f"  --> Checkpoint Terbaik Disimpan! (Val AUC: {val_metrics['auc']:.4f}, HTER: {val_metrics['hter']*100:.2f}%)")
+            print(f"  --> Checkpoint Terbaik Disimpan! (Val AUC: {val_metrics['auc']:.4f})")
 
         history.append({
             "epoch": epoch,
@@ -499,89 +389,51 @@ def main():
             "val_acc": val_metrics["accuracy"],
             "val_auc": val_metrics["auc"],
             "val_hter": val_metrics["hter"],
-            "val_apcer": val_metrics["apcer"],
-            "val_bpcer": val_metrics["bpcer"],
         })
 
         if early_stopping.early_stop:
             print(f"\n[Info] Early stopping terpicu pada epoch {epoch}!")
             break
 
-    total_duration_minutes = (time.time() - t_start) / 60.0
-
-    # 5. Evaluasi Final pada Test Set Unseen
-    print("\n" + "="*75)
-    print("EVALUASI FINAL PADA TEST SET UNSEEN (MENGGUNAKAN CHECKPOINT TERBAIK)")
-    print("="*75)
+    # 5. Evaluasi Final pada Test Set
+    print("\n" + "="*70)
+    print("EVALUASI FINAL PADA TEST SET (MODEL CHECKPOINT TERBAIK)")
+    print("="*70)
     if best_ckpt_path.exists():
-        ckpt = torch.load(best_ckpt_path, map_location=DEVICE, weights_only=False)
+        ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         print(f"[Success] Memuat model terbaik dari Epoch {ckpt.get('epoch')}")
 
-    test_metrics, test_targets, test_scores = evaluate_dataset(model, test_loader, criterion)
+    test_metrics = evaluate(model, test_loader, criterion, device)
     print(f"Test Accuracy : {test_metrics['accuracy']*100:.2f}%")
     print(f"Test AUC      : {test_metrics['auc']:.4f}")
     print(f"Test HTER     : {test_metrics['hter']*100:.2f}%")
     print(f"Test APCER    : {test_metrics['apcer']*100:.2f}%")
     print(f"Test BPCER    : {test_metrics['bpcer']*100:.2f}%\n")
 
-    # Simpan Ringkasan Akhir
+    # Simpan Ringkasan Evaluasi
     summary_data = {
         "experiment_name": exp_name,
-        "completed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "total_duration_minutes": round(total_duration_minutes, 2),
-        "early_stopping": {
-            "triggered": early_stopping.early_stop,
-            "stopped_epoch": len(history),
-        },
-        "best_checkpoint": {
-            "best_epoch": early_stopping.best_epoch,
-            "best_val_auc": round(float(ckpt.get("val_auc", 0.0)), 4) if best_ckpt_path.exists() else 0.0,
-        },
-        "final_test_set_evaluation": {
+        "variant": args.variant,
+        "best_epoch": early_stopping.best_epoch,
+        "test_evaluation": {
             "test_accuracy": round(float(test_metrics['accuracy']), 4),
             "test_accuracy_pct": f"{test_metrics['accuracy']*100:.2f}%",
             "test_auc": round(float(test_metrics['auc']), 4),
+            "test_hter": round(float(test_metrics['hter']), 4),
+            "test_hter_pct": f"{test_metrics['hter']*100:.2f}%",
             "test_apcer": round(float(test_metrics['apcer']), 4),
             "test_apcer_pct": f"{test_metrics['apcer']*100:.2f}%",
             "test_bpcer": round(float(test_metrics['bpcer']), 4),
             "test_bpcer_pct": f"{test_metrics['bpcer']*100:.2f}%",
-            "test_hter": round(float(test_metrics['hter']), 4),
-            "test_hter_pct": f"{test_metrics['hter']*100:.2f}%",
-            "test_loss": round(float(test_metrics['loss']), 4),
         }
     }
-    with open(save_dir / "final_test_summary.json", "w") as fp:
+    with open(output_dir / "final_test_summary.json", "w") as fp:
         json.dump(summary_data, fp, indent=4)
 
-    pd.DataFrame(history).to_csv(save_dir / "training_history.csv", index=False)
-    with open(save_dir / "training_history.json", "w") as fp:
-        json.dump(history, fp, indent=4)
-
-    # Buat Plot Grafik Hasil Evaluasi
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    axes[0].plot([h['epoch'] for h in history], [h['train_loss'] for h in history], label='Train Loss')
-    axes[0].plot([h['epoch'] for h in history], [h['val_loss'] for h in history], label='Val Loss')
-    axes[0].set_title(f'{exp_name} - Loss History')
-    axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss')
-    axes[0].legend()
-    axes[0].grid(True)
-
-    axes[1].plot([h['epoch'] for h in history], [h['val_acc']*100 for h in history], label='Val Acc (%)')
-    axes[1].plot([h['epoch'] for h in history], [h['val_auc']*100 for h in history], label='Val AUC (x100)')
-    axes[1].plot([h['epoch'] for h in history], [h['val_hter']*100 for h in history], label='Val HTER (%)')
-    axes[1].set_title(f'{exp_name} - Validation Metrics')
-    axes[1].set_xlabel('Epoch')
-    axes[1].set_ylabel('Percentage (%)')
-    axes[1].legend()
-    axes[1].grid(True)
-
-    plt.tight_layout()
-    plt.savefig(save_dir / f"training_history_{variant_name}.png", dpi=150)
-    plt.close()
-
-    print(f"\n[Selesai] Semua artefak evaluasi tersimpan di: {save_dir}")
+    pd.DataFrame(history).to_csv(output_dir / "training_history.csv", index=False)
+    print(f"[Done] Hasil tersimpan di folder: {output_dir}")
 
 if __name__ == "__main__":
     main()
+

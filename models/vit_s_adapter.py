@@ -226,3 +226,4 @@ if __name__ == "__main__":
         model.print_parameter_summary()
         out = model(dummy_input)
         print(f"[{var.upper()}] Input: {dummy_input.shape} -> Logits: {out['logits'].shape}, Probs: {out['probs'].shape}\n")
+
