@@ -209,7 +209,15 @@ def main():
     md_path = "tabel_bab4_rekap_seluruh_model.md"
     with open(md_path, "w", encoding="utf-8") as fp:
         fp.write("# Tabel 4.1 Rekapitulasi Hasil Pelatihan Seluruh Model (Hybrid & Baseline)\n\n")
-        fp.write(df.to_markdown(index=False))
+        try:
+            fp.write(df.to_markdown(index=False))
+        except Exception:
+            # Fallback jika package tabulate belum terpasang
+            headers = [str(c) for c in df.columns]
+            fp.write("| " + " | ".join(headers) + " |\n")
+            fp.write("| " + " | ".join([":---:" if c in ["No", "d", "BS", "ES (Best Ep)"] else ":---" for c in headers]) + " |\n")
+            for _, r in df.iterrows():
+                fp.write("| " + " | ".join([str(val) for val in r]) + " |\n")
         fp.write("\n")
 
     print("\n" + "=" * 135)
