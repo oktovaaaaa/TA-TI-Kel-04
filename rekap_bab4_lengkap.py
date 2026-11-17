@@ -127,6 +127,14 @@ def extract_model_data():
                 with open(hist_file, "r") as fp:
                     h = json.load(fp)
                 if isinstance(h, list) and len(h) > 0:
+                    if best_ep == "-":
+                        # Cari epoch yang is_best == True (pada model awal checkpoints_base)
+                        best_candidates = [x.get("epoch") for x in h if x.get("is_best") is True]
+                        if best_candidates:
+                            best_ep = best_candidates[-1]
+                        else:
+                            best_ep = len(h)
+
                     target_ep = best_ep if isinstance(best_ep, int) else len(h)
                     bh = next((x for x in h if x.get("epoch") == target_ep), h[-1])
                     if "train_loss" in bh:
