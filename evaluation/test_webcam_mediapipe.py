@@ -26,6 +26,11 @@ import urllib.request
 from pathlib import Path
 from PIL import Image
 
+# Tambahkan root proyek ke sys.path
+ROOT_DIR = Path(__file__).resolve().parent.parent if (Path(__file__).resolve().parent.name == "evaluation") else Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import cv2
 import numpy as np
 import torch
@@ -81,21 +86,27 @@ def get_mediapipe_detector():
 # ─────────────────────────────────────────────────────────────
 def find_default_checkpoint():
     """Mencari checkpoint terbaik yang tersedia secara otomatis."""
-    candidates = [
-        Path("checkpoints_c_small_v_small/best_token_hybrid_c_small_v_small.pth"),
-        Path("checkpoints_c_small_v_base/best_token_hybrid_c_small_v_base.pth"),
-        Path("checkpoints_c_tiny_v_small/best_token_hybrid_c_tiny_v_small.pth"),
-        Path("checkpoints_c_tiny_v_tiny/best_token_hybrid_c_tiny_v_tiny.pth"),
-        Path("checkpoints/best_token_hybrid_base_model.pth"),
-        Path("checkpoints/best_token_hybrid_model.pth"),
+    rel_candidates = [
+        "checkpoints_c_small_v_small/best_token_hybrid_c_small_v_small.pth",
+        "checkpoints_c_small_v_base/best_token_hybrid_c_small_v_base.pth",
+        "checkpoints_c_tiny_v_small/best_token_hybrid_c_tiny_v_small.pth",
+        "checkpoints_c_tiny_v_tiny/best_token_hybrid_c_tiny_v_tiny.pth",
+        "checkpoints/best_token_hybrid_base_model.pth",
+        "checkpoints/best_token_hybrid_model.pth",
     ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return candidates[0]
+    for rel in rel_candidates:
+        p1 = Path(rel)
+        if p1.exists():
+            return p1
+        p2 = ROOT_DIR / rel
+        if p2.exists():
+            return p2
+    return Path(rel_candidates[0])
 
 def load_trained_model(checkpoint_path):
     checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.exists() and (ROOT_DIR / checkpoint_path).exists():
+        checkpoint_path = ROOT_DIR / checkpoint_path
     if not checkpoint_path.exists():
         print(f"\n[Error] File checkpoint tidak ditemukan di: {checkpoint_path}")
         print("Silakan download terlebih dahulu model dari server dengan perintah scp.")

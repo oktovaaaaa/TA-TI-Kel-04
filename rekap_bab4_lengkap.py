@@ -146,9 +146,10 @@ def extract_model_data():
                 pass
 
         # Fallback jika di local folder belum ada tapi ada di CSV rekap
-        if test_acc == "-" and Path("rekap_convnext_baseline.csv").exists():
+        csv_conv = Path("results/rekap_convnext_baseline.csv") if Path("results/rekap_convnext_baseline.csv").exists() else Path("rekap_convnext_baseline.csv")
+        if test_acc == "-" and csv_conv.exists():
             try:
-                df_c = pd.read_csv("rekap_convnext_baseline.csv")
+                df_c = pd.read_csv(csv_conv)
                 row = df_c[df_c["Kode"] == code]
                 if not row.empty:
                     r = row.iloc[0]
@@ -163,9 +164,10 @@ def extract_model_data():
             except Exception:
                 pass
 
-        if test_acc == "-" and Path("rekap_vit_baseline.csv").exists():
+        csv_vit = Path("results/rekap_vit_baseline.csv") if Path("results/rekap_vit_baseline.csv").exists() else Path("rekap_vit_baseline.csv")
+        if test_acc == "-" and csv_vit.exists():
             try:
-                df_v = pd.read_csv("rekap_vit_baseline.csv")
+                df_v = pd.read_csv(csv_vit)
                 row = df_v[df_v["Kode"] == code]
                 if not row.empty:
                     r = row.iloc[0]

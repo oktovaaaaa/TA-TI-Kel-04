@@ -26,7 +26,7 @@ checkpoints_*/
 *.pt
 *.onnx
 *.tflite
-!blaze_face_short_range.tflite
+!**/blaze_face_short_range.tflite
 
 # External raw source clones
 Test_Live/

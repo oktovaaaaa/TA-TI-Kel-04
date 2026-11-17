@@ -29,6 +29,11 @@ from torchvision.io import read_image
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, roc_curve
 
+# Tambahkan root proyek ke sys.path jika dipanggil dari subfolder training
+ROOT_DIR = Path(__file__).resolve().parent.parent if (Path(__file__).resolve().parent.name == "training") else Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from models.s_adapter_convnext_hybrid import HybridTokenSAdapterConvNeXt, FocalLoss, get_optimizer
 
 # ============================================================

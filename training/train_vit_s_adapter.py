@@ -1,8 +1,8 @@
 """
-Training Script: Single-Branch ConvNeXt + S-Adapter (Face Anti-Spoofing)
-========================================================================
-Skrip pelatihan studi ablasi khusus ConvNeXt (Local Feature) + S-Adapter (PEFT)
-tanpa cabang Vision Transformer (ViT) dan tanpa Cross-Attention.
+Training Script: Single-Branch Vision Transformer (ViT) + S-Adapter (Face Anti-Spoofing)
+========================================================================================
+Skrip pelatihan studi ablasi khusus Vision Transformer (Global Feature) + S-Adapter (PEFT)
+tanpa cabang ConvNeXt dan tanpa Cross-Attention.
 
 Konfigurasi & Metrik Identik 100% dengan Model Hybrid:
 - Dataset Split: Subject-Independent (70% Train, 15% Val, 15% Test) dengan SEED=42
@@ -14,9 +14,9 @@ Konfigurasi & Metrik Identik 100% dengan Model Hybrid:
 - Evaluasi Test Set Unseen: Accuracy, AUC, HTER, APCER, BPCER, Confusion Matrix
 
 Penggunaan:
-  python train_convnext_s_adapter.py --variant tiny
-  python train_convnext_s_adapter.py --variant small
-  python train_convnext_s_adapter.py --variant base
+  python train_vit_s_adapter.py --variant tiny
+  python train_vit_s_adapter.py --variant small
+  python train_vit_s_adapter.py --variant base
 """
 
 import os
@@ -44,7 +44,12 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from torchvision.io import read_image
 
-from models.convnext_s_adapter import ConvNeXtSAdapter
+# Tambahkan root proyek ke sys.path jika dipanggil dari subfolder training
+ROOT_DIR = Path(__file__).resolve().parent.parent if (Path(__file__).resolve().parent.name == "training") else Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from models.vit_s_adapter import ViTSAdapter
 
 # ============================================================
 # 1. REPRODUCIBILITY & DEVICE SETUP
@@ -61,7 +66,7 @@ if torch.cuda.is_available():
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # ============================================================
-# 2. MANIFEST CELEBA-SPOOF (PERSIS DENGAN MODEL HYBRID)
+# 2. MANIFEST CELEBA-SPOOF
 # ============================================================
 def build_manifest(data_root="./CelebA_Spoof"):
     data_root = Path(data_root)
@@ -78,7 +83,6 @@ def build_manifest(data_root="./CelebA_Spoof"):
             for t in subj.iterdir():
                 if not t.is_dir():
                     continue
-                # Label 1 = Live (Real), Label 0 = Spoof
                 label = 1 if t.name.lower() in ['1', 'live'] else 0
                 for img in list(t.glob('*.jpg')) + list(t.glob('*.png')):
                     records.append({
@@ -306,8 +310,8 @@ def evaluate_dataset(model, loader, criterion):
 # 7. MAIN FUNCTION
 # ============================================================
 def main():
-    parser = argparse.ArgumentParser(description="Pelatihan Single-Branch ConvNeXt + S-Adapter")
-    parser.add_argument("--variant", type=str, default="small", choices=["tiny", "small", "base"], help="Varian ConvNeXt (tiny, small, base)")
+    parser = argparse.ArgumentParser(description="Pelatihan Single-Branch ViT + S-Adapter")
+    parser.add_argument("--variant", type=str, default="small", choices=["tiny", "small", "base"], help="Varian ViT (tiny, small, base)")
     parser.add_argument("--data_dir", type=str, default="./CelebA_Spoof")
     parser.add_argument("--samples", type=int, default=0, help="0 = Full dataset")
     parser.add_argument("--batch_size", type=int, default=64)
@@ -322,9 +326,9 @@ def main():
     args = parser.parse_args()
 
     variant_name = args.variant.lower()
-    convnext_model_name = f"convnext_{variant_name}"
-    exp_name = f"ConvNeXt_{variant_name.capitalize()}_SAdapter"
-    save_dir = Path(args.save_dir if args.save_dir else f"./checkpoints_convnext_{variant_name}")
+    vit_model_name = f"vit_{variant_name}_patch16_224"
+    exp_name = f"ViT_{variant_name.capitalize()}_SAdapter"
+    save_dir = Path(args.save_dir if args.save_dir else f"./checkpoints_vit_{variant_name}")
     save_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "="*75)
@@ -381,7 +385,7 @@ def main():
     )
 
     # 2. Inisialisasi Model
-    model = ConvNeXtSAdapter(
+    model = ViTSAdapter(
         variant=variant_name,
         adapter_bottleneck=args.adapter_bottleneck,
         num_classes=2,
@@ -413,8 +417,9 @@ def main():
             "workers": args.workers,
         },
         "model_architecture": {
-            "convnext_name": convnext_model_name,
+            "vit_name": vit_model_name,
             "variant": variant_name,
+            "embedding_dim": model.embed_dim,
             "adapter_bottleneck": args.adapter_bottleneck,
             "num_classes": 2,
             "pretrained": True,
@@ -444,12 +449,11 @@ def main():
         json.dump(config_data, fp, indent=4)
 
     # 3. Setup Optimizer
-    adapter_params = [p for p in model.spatial_adapter.parameters() if p.requires_grad]
+    adapter_params = [p for p in model.adapters.parameters() if p.requires_grad]
     head_params = [p for p in model.classifier.parameters() if p.requires_grad]
-    stage4_params = [p for p in model.stages[-1].parameters() if p.requires_grad]
 
     optimizer = torch.optim.AdamW([
-        {"params": adapter_params + stage4_params, "lr": args.lr_adapter, "weight_decay": 1e-4},
+        {"params": adapter_params, "lr": args.lr_adapter, "weight_decay": 1e-4},
         {"params": head_params, "lr": args.lr_head, "weight_decay": 1e-2},
     ])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
@@ -459,7 +463,7 @@ def main():
 
     # 4. Training Loop
     history = []
-    best_ckpt_path = save_dir / f"best_convnext_{variant_name}_s_adapter.pth"
+    best_ckpt_path = save_dir / f"best_vit_{variant_name}_s_adapter.pth"
     t_start = time.time()
 
     print(f"\nMemulai Pelatihan {exp_name} (Max {args.epochs} Epochs)...")
@@ -481,7 +485,7 @@ def main():
             torch.save({
                 "epoch": epoch,
                 "variant": variant_name,
-                "model_name": convnext_model_name,
+                "model_name": vit_model_name,
                 "model_state_dict": model.state_dict(),
                 "val_acc": val_metrics["accuracy"],
                 "val_auc": val_metrics["auc"],
@@ -585,3 +589,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
