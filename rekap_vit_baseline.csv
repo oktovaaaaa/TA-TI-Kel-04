@@ -1,0 +1,4 @@
+Kode,Model,Dimensi (d),Total Params,Trainable %,Best Epoch,Akurasi (%),AUC,HTER (%),APCER (%),BPCER (%),Ukuran File,Durasi (menit)
+B4,ViT_Tiny_SAdapter,192,5.9M,5.92%,7,99.39%,0.9997,0.69%,0.45%,0.93%,22.5 MB,76.85
+B5,ViT_Small_SAdapter,384,22.4M,3.11%,13,99.44%,0.9999,0.48%,0.71%,0.25%,85.4 MB,168.1
+B6,ViT_Base_SAdapter,768,87.2M,1.59%,11,99.68%,1.0000,0.27%,0.42%,0.13%,332.7 MB,223.44
