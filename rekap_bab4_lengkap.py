@@ -39,9 +39,6 @@ def extract_model_data():
         ("B4", "Baseline ViT", "ViT-Tiny + S-Adapter", "checkpoints_vit_tiny", 192),
         ("B5", "Baseline ViT", "ViT-Small + S-Adapter", "checkpoints_vit_small", 384),
         ("B6", "Baseline ViT", "ViT-Base + S-Adapter", "checkpoints_vit_base", 768),
-
-        # --- KELOMPOK 4: PROTOTIPE AWAL SEBELUM OPTIMASI TOKEN ADAPTIF (MODEL KE-16) ---
-        ("P1", "Prototipe Awal", "ConvNeXt-Base + ViT-Base (Awal)", "checkpoints_base", 768),
     ]
 
     records = []
