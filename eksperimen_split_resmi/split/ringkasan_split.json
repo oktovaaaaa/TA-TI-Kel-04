@@ -1,0 +1,55 @@
+{
+    "seed": 42,
+    "sumber_label": "metas/intra_test/train_label.txt & test_label.txt (resmi)",
+    "konvensi_label": "1 = live, 0 = spoof",
+    "total_citra_resmi": 561575,
+    "citra_dibuang_overlap": 216,
+    "subjek_overlap_dibuang_dari_train": [
+        5028,
+        7332,
+        9735
+    ],
+    "citra_label_folder_berbeda_dari_resmi": 2022,
+    "tabel": [
+        {
+            "bagian": "train",
+            "jumlah_subjek": 7064,
+            "persen_subjek": 76.84,
+            "jumlah_citra": 427000,
+            "persen_citra": 76.07,
+            "jumlah_live": 140344,
+            "jumlah_spoof": 286656,
+            "rasio_live_persen": 32.87
+        },
+        {
+            "bagian": "val",
+            "jumlah_subjek": 1125,
+            "persen_subjek": 12.24,
+            "jumlah_citra": 67189,
+            "persen_citra": 11.97,
+            "jumlah_live": 22059,
+            "jumlah_spoof": 45130,
+            "rasio_live_persen": 32.83
+        },
+        {
+            "bagian": "test",
+            "jumlah_subjek": 1004,
+            "persen_subjek": 10.92,
+            "jumlah_citra": 67170,
+            "persen_citra": 11.97,
+            "jumlah_live": 19923,
+            "jumlah_spoof": 47247,
+            "rasio_live_persen": 29.66
+        },
+        {
+            "bagian": "total",
+            "jumlah_subjek": 9193,
+            "persen_subjek": 100.0,
+            "jumlah_citra": 561359,
+            "persen_citra": 100.0,
+            "jumlah_live": 182326,
+            "jumlah_spoof": 379033,
+            "rasio_live_persen": 32.48
+        }
+    ]
+}

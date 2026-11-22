@@ -1,0 +1,5 @@
+bagian,jumlah_subjek,persen_subjek,jumlah_citra,persen_citra,jumlah_live,jumlah_spoof,rasio_live_persen
+train,7064,76.84,427000,76.07,140344,286656,32.87
+val,1125,12.24,67189,11.97,22059,45130,32.83
+test,1004,10.92,67170,11.97,19923,47247,29.66
+total,9193,100.0,561359,100.0,182326,379033,32.48

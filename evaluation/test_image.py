@@ -13,8 +13,12 @@ import sys
 # Prevent OpenMP duplicate DLL initialization conflict on Anaconda Windows
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
-import argparse
 from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent if (Path(__file__).resolve().parent.name == "evaluation") else Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+import argparse
 from PIL import Image
 import matplotlib.pyplot as plt
 import torch
