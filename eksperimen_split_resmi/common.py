@@ -160,20 +160,59 @@ def hitung_metrik(y_true, y_score, threshold: float = 0.5) -> dict:
 # MODEL & OPTIMIZER
 # ============================================================
 KONFIG_MODEL = {
-    # nama        : (keterangan, builder)
+    # Seri ConvNeXt-Tiny Hybrid (H1, H2, H3)
+    "c_tiny_v_tiny": "Hybrid ConvNeXt-Tiny + ViT-Tiny (S-Adapter di kedua cabang) = H1",
+    "c_tiny_v_small": "Hybrid ConvNeXt-Tiny + ViT-Small (S-Adapter di kedua cabang) = H2",
+    "c_tiny_v_base": "Hybrid ConvNeXt-Tiny + ViT-Base (S-Adapter di kedua cabang) = H3",
+    "h1": "Hybrid ConvNeXt-Tiny + ViT-Tiny (S-Adapter di kedua cabang) = H1",
+    "h2": "Hybrid ConvNeXt-Tiny + ViT-Small (S-Adapter di kedua cabang) = H2",
+    "h3": "Hybrid ConvNeXt-Tiny + ViT-Base (S-Adapter di kedua cabang) = H3",
+    # Seri ConvNeXt-Small Hybrid (H5) & Baseline (B2)
     "hybrid": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
+    "h5": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
     "convnext": "ConvNeXt-Small + S-Adapter = B2",
+    "b2": "ConvNeXt-Small + S-Adapter = B2",
 }
 
 
 def buat_model(jenis: str, mode: str, pretrained: bool = True) -> nn.Module:
     """
-    jenis : 'hybrid' | 'convnext'
-    mode  : 'freeze' -> sama dengan model lama (backbone dibekukan, ConvNeXt stage 4 dilatih)
+    jenis : 'c_tiny_v_tiny'/'h1' | 'c_tiny_v_small'/'h2' | 'c_tiny_v_base'/'h3' | 'hybrid'/'h5' | 'convnext'/'b2'
+    mode  : 'freeze' -> sama dengan model lama (backbone dibekukan, S-Adapter, ConvNeXt stage 4, fusion & classifier dilatih)
             'fullft' -> seluruh parameter dilatih (full fine-tuning)
     """
     freeze = (mode == "freeze")
-    if jenis == "hybrid":
+    if jenis in ("c_tiny_v_tiny", "h1"):
+        model = HybridTokenSAdapterConvNeXt(
+            vit_name="vit_tiny_patch16_224",
+            convnext_name="convnext_tiny",
+            adapter_bottleneck=64,
+            num_heads=3,
+            num_classes=2,
+            pretrained=pretrained,
+            freeze_backbone=freeze,
+        )
+    elif jenis in ("c_tiny_v_small", "h2"):
+        model = HybridTokenSAdapterConvNeXt(
+            vit_name="vit_small_patch16_224",
+            convnext_name="convnext_tiny",
+            adapter_bottleneck=64,
+            num_heads=6,
+            num_classes=2,
+            pretrained=pretrained,
+            freeze_backbone=freeze,
+        )
+    elif jenis in ("c_tiny_v_base", "h3"):
+        model = HybridTokenSAdapterConvNeXt(
+            vit_name="vit_base_patch16_224",
+            convnext_name="convnext_tiny",
+            adapter_bottleneck=64,
+            num_heads=12,
+            num_classes=2,
+            pretrained=pretrained,
+            freeze_backbone=freeze,
+        )
+    elif jenis in ("hybrid", "h5"):
         model = HybridTokenSAdapterConvNeXt(
             vit_name="vit_small_patch16_224",
             convnext_name="convnext_small",
@@ -183,7 +222,7 @@ def buat_model(jenis: str, mode: str, pretrained: bool = True) -> nn.Module:
             pretrained=pretrained,
             freeze_backbone=freeze,
         )
-    elif jenis == "convnext":
+    elif jenis in ("convnext", "b2"):
         model = ConvNeXtSAdapter(
             variant="small",
             adapter_bottleneck=64,
@@ -192,7 +231,7 @@ def buat_model(jenis: str, mode: str, pretrained: bool = True) -> nn.Module:
             freeze_backbone=freeze,
         )
     else:
-        raise ValueError(f"Jenis model tidak dikenal: {jenis}")
+        raise ValueError(f"Jenis model tidak dikenal: '{jenis}'. Pilihan yang tersedia: {list(KONFIG_MODEL.keys())}")
 
     if not freeze:
         for p in model.parameters():

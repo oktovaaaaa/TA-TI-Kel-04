@@ -3,10 +3,13 @@ Training & Evaluasi dengan Split Resmi CelebA-Spoof (Per Subjek)
 ================================================================
 
 Model yang didukung:
-  --model hybrid   : Hybrid ConvNeXt-Small + ViT-Small, S-Adapter di kedua cabang (H5)
-  --model convnext : ConvNeXt-Small + S-Adapter (B2)
+  --model c_tiny_v_tiny (atau h1) : Hybrid ConvNeXt-Tiny + ViT-Tiny (H1)
+  --model c_tiny_v_small (atau h2) : Hybrid ConvNeXt-Tiny + ViT-Small (H2)
+  --model c_tiny_v_base (atau h3)  : Hybrid ConvNeXt-Tiny + ViT-Base (H3)
+  --model hybrid (atau h5)         : Hybrid ConvNeXt-Small + ViT-Small (H5)
+  --model convnext (atau b2)       : ConvNeXt-Small + S-Adapter (B2)
 Mode:
-  --mode freeze    : sama dengan model lama (backbone dibekukan, ConvNeXt stage 4 dilatih)
+  --mode freeze    : backbone dibekukan (PEFT: S-Adapter + ConvNeXt stage 4 + head dilatih)
   --mode fullft    : full fine-tuning, seluruh parameter dilatih
 
 Yang dicatat SETIAP EPOCH (training_history.csv / .json):
@@ -187,7 +190,7 @@ def bulatkan(m):
 
 def main():
     p = argparse.ArgumentParser(description="Training split resmi CelebA-Spoof")
-    p.add_argument("--model", choices=["hybrid", "convnext"], required=True)
+    p.add_argument("--model", choices=list(KONFIG_MODEL.keys()), required=True)
     p.add_argument("--mode", choices=["freeze", "fullft"], required=True)
     p.add_argument("--data_dir", default="./CelebA_Spoof")
     p.add_argument("--split_csv", default=str(HERE / "split" / "split.csv"))

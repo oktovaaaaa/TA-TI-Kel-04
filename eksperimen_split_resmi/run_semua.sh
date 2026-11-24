@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 
 PYTHON=${PYTHON:-python}
 DATA_DIR=${DATA_DIR:-./CelebA_Spoof}
-WORKERS=${WORKERS:-8}
+WORKERS=${WORKERS:-2}
 
 # 1. Buat split (sekali saja; dilewati bila split.csv sudah ada)
 if [ ! -f eksperimen_split_resmi/split/split.csv ]; then
