@@ -36,10 +36,10 @@ if [ $# -ge 1 ]; then
     DAFTAR=("$MODEL $MODE")
 else
     DAFTAR=("c_small_v_tiny freeze")
-    if [ ! -f eksperimen_split_resmi/hasil/hybrid_freeze/final_summary.json ]; then
+    if [ ! -f eksperimen_split_resmi/hasil/hybrid_freeze/final_summary.json ] && [ ! -f eksperimen_split_resmi/hasil/c_small_v_small_freeze/final_summary.json ]; then
         DAFTAR+=("c_small_v_small freeze")
     else
-        echo "[INFO] H5 (hybrid_freeze) sudah selesai, melewati c_small_v_small."
+        echo "[INFO] H5 (hybrid_freeze / c_small_v_small_freeze) sudah selesai, melewati c_small_v_small."
     fi
     DAFTAR+=("c_small_v_base freeze")
 fi
