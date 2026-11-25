@@ -167,57 +167,51 @@ KONFIG_MODEL = {
     "h1": "Hybrid ConvNeXt-Tiny + ViT-Tiny (S-Adapter di kedua cabang) = H1",
     "h2": "Hybrid ConvNeXt-Tiny + ViT-Small (S-Adapter di kedua cabang) = H2",
     "h3": "Hybrid ConvNeXt-Tiny + ViT-Base (S-Adapter di kedua cabang) = H3",
-    # Seri ConvNeXt-Small Hybrid (H5) & Baseline (B2)
+    # Seri ConvNeXt-Small Hybrid (H4, H5, H6) & Baseline (B2)
+    "c_small_v_tiny": "Hybrid ConvNeXt-Small + ViT-Tiny (S-Adapter di kedua cabang) = H4",
+    "c_small_v_small": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
+    "c_small_v_base": "Hybrid ConvNeXt-Small + ViT-Base (S-Adapter di kedua cabang) = H6",
+    "h4": "Hybrid ConvNeXt-Small + ViT-Tiny (S-Adapter di kedua cabang) = H4",
     "hybrid": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
     "h5": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
+    "h6": "Hybrid ConvNeXt-Small + ViT-Base (S-Adapter di kedua cabang) = H6",
     "convnext": "ConvNeXt-Small + S-Adapter = B2",
     "b2": "ConvNeXt-Small + S-Adapter = B2",
+}
+
+HYBRID_VARIANTS = {
+    "c_tiny_v_tiny": ("vit_tiny_patch16_224", "convnext_tiny", 3),
+    "h1": ("vit_tiny_patch16_224", "convnext_tiny", 3),
+    "c_tiny_v_small": ("vit_small_patch16_224", "convnext_tiny", 6),
+    "h2": ("vit_small_patch16_224", "convnext_tiny", 6),
+    "c_tiny_v_base": ("vit_base_patch16_224", "convnext_tiny", 12),
+    "h3": ("vit_base_patch16_224", "convnext_tiny", 12),
+    "c_small_v_tiny": ("vit_tiny_patch16_224", "convnext_small", 3),
+    "h4": ("vit_tiny_patch16_224", "convnext_small", 3),
+    "c_small_v_small": ("vit_small_patch16_224", "convnext_small", 6),
+    "hybrid": ("vit_small_patch16_224", "convnext_small", 6),
+    "h5": ("vit_small_patch16_224", "convnext_small", 6),
+    "c_small_v_base": ("vit_base_patch16_224", "convnext_small", 12),
+    "h6": ("vit_base_patch16_224", "convnext_small", 12),
 }
 
 
 def buat_model(jenis: str, mode: str, pretrained: bool = True) -> nn.Module:
     """
-    jenis : 'c_tiny_v_tiny'/'h1' | 'c_tiny_v_small'/'h2' | 'c_tiny_v_base'/'h3' | 'hybrid'/'h5' | 'convnext'/'b2'
+    jenis : 'c_tiny_v_tiny'/'h1' | 'c_tiny_v_small'/'h2' | 'c_tiny_v_base'/'h3' |
+            'c_small_v_tiny'/'h4' | 'c_small_v_small'/'hybrid'/'h5' | 'c_small_v_base'/'h6' |
+            'convnext'/'b2'
     mode  : 'freeze' -> sama dengan model lama (backbone dibekukan, S-Adapter, ConvNeXt stage 4, fusion & classifier dilatih)
             'fullft' -> seluruh parameter dilatih (full fine-tuning)
     """
     freeze = (mode == "freeze")
-    if jenis in ("c_tiny_v_tiny", "h1"):
+    if jenis in HYBRID_VARIANTS:
+        vit_name, convnext_name, num_heads = HYBRID_VARIANTS[jenis]
         model = HybridTokenSAdapterConvNeXt(
-            vit_name="vit_tiny_patch16_224",
-            convnext_name="convnext_tiny",
+            vit_name=vit_name,
+            convnext_name=convnext_name,
             adapter_bottleneck=64,
-            num_heads=3,
-            num_classes=2,
-            pretrained=pretrained,
-            freeze_backbone=freeze,
-        )
-    elif jenis in ("c_tiny_v_small", "h2"):
-        model = HybridTokenSAdapterConvNeXt(
-            vit_name="vit_small_patch16_224",
-            convnext_name="convnext_tiny",
-            adapter_bottleneck=64,
-            num_heads=6,
-            num_classes=2,
-            pretrained=pretrained,
-            freeze_backbone=freeze,
-        )
-    elif jenis in ("c_tiny_v_base", "h3"):
-        model = HybridTokenSAdapterConvNeXt(
-            vit_name="vit_base_patch16_224",
-            convnext_name="convnext_tiny",
-            adapter_bottleneck=64,
-            num_heads=12,
-            num_classes=2,
-            pretrained=pretrained,
-            freeze_backbone=freeze,
-        )
-    elif jenis in ("hybrid", "h5"):
-        model = HybridTokenSAdapterConvNeXt(
-            vit_name="vit_small_patch16_224",
-            convnext_name="convnext_small",
-            adapter_bottleneck=64,
-            num_heads=6,
+            num_heads=num_heads,
             num_classes=2,
             pretrained=pretrained,
             freeze_backbone=freeze,

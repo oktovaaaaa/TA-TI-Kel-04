@@ -3,11 +3,13 @@ Training & Evaluasi dengan Split Resmi CelebA-Spoof (Per Subjek)
 ================================================================
 
 Model yang didukung:
-  --model c_tiny_v_tiny (atau h1) : Hybrid ConvNeXt-Tiny + ViT-Tiny (H1)
-  --model c_tiny_v_small (atau h2) : Hybrid ConvNeXt-Tiny + ViT-Small (H2)
-  --model c_tiny_v_base (atau h3)  : Hybrid ConvNeXt-Tiny + ViT-Base (H3)
-  --model hybrid (atau h5)         : Hybrid ConvNeXt-Small + ViT-Small (H5)
-  --model convnext (atau b2)       : ConvNeXt-Small + S-Adapter (B2)
+  --model c_tiny_v_tiny (atau h1)   : Hybrid ConvNeXt-Tiny + ViT-Tiny (H1)
+  --model c_tiny_v_small (atau h2)  : Hybrid ConvNeXt-Tiny + ViT-Small (H2)
+  --model c_tiny_v_base (atau h3)   : Hybrid ConvNeXt-Tiny + ViT-Base (H3)
+  --model c_small_v_tiny (atau h4)  : Hybrid ConvNeXt-Small + ViT-Tiny (H4)
+  --model hybrid / c_small_v_small (h5) : Hybrid ConvNeXt-Small + ViT-Small (H5)
+  --model c_small_v_base (atau h6)  : Hybrid ConvNeXt-Small + ViT-Base (H6)
+  --model convnext (atau b2)        : ConvNeXt-Small + S-Adapter (B2)
 Mode:
   --mode freeze    : backbone dibekukan (PEFT: S-Adapter + ConvNeXt stage 4 + head dilatih)
   --mode fullft    : full fine-tuning, seluruh parameter dilatih
