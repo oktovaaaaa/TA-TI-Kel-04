@@ -72,7 +72,7 @@ Penggabungan dilakukan di **AKHIR STAGE (Late Feature-Level Fusion)** setelah **
 ```text
 Test_TA/
 ├── models/
-│   └── s_adapter_convnext_hybrid.py    # Arsitektur: Dual-Branch Hybrid Token S-Adapter (ConvNeXt-Tiny + ViT-Tiny)
+│   └── hybrid_convnext_vit_s_adapter.py    # Arsitektur: Dual-Branch Hybrid Token S-Adapter (ConvNeXt-Tiny + ViT-Tiny)
 ├── checkpoints/
 │   └── best_token_hybrid_model.pth     # Checkpoint model Hybrid Token terbaik
 ├── CelebA_Spoof/                       # Dataset resmi CelebA-Spoof (Train/Test + Bounding Box txt)

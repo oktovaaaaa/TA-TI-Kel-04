@@ -8,7 +8,7 @@ Output -> assets/Arsitektur_Detail/
 
 Seluruh angka dimensi & parameter diambil dari konfigurasi model H5 (Champion):
 ConvNeXt-Small + ViT-Small, d = 384, adapter bottleneck r = 64, fusion heads = 6
-(models/s_adapter_convnext_hybrid.py). Jumlah parameter sudah diverifikasi
+(models/hybrid_convnext_vit_s_adapter.py). Jumlah parameter sudah diverifikasi
 dengan menginstansiasi model (pretrained=False) dan menghitung numel().
 """
 from pathlib import Path
@@ -357,7 +357,7 @@ def draw_convnext():
             ["Rasio trainable", ("31.83 %", "right")]]
     table(ax, PX + 0.2, 16.15, rows, [0, 4.65], size=8.8, row_h=0.32, header=False,
           bold_rows=(2,))
-    fig.text(0.5, 0.004, "Sumber: models/s_adapter_convnext_hybrid.py — ConvNeXtTokenBranch & "
+    fig.text(0.5, 0.004, "Sumber: models/hybrid_convnext_vit_s_adapter.py — ConvNeXtTokenBranch & "
              "ConvNeXtTokenSAdapter", ha="center", fontsize=8, color=MUTED)
     save(fig, "01_ConvNeXt_Branch_Detail.png")
 
@@ -536,7 +536,7 @@ def draw_vit():
             ["Rasio trainable", ("2.67 %", "right")]]
     table(ax, PX + 0.2, 16.3, rows, [0, 4.65], size=8.8, row_h=0.32, header=False,
           bold_rows=(2,))
-    fig.text(0.5, 0.004, "Sumber: models/s_adapter_convnext_hybrid.py — ViTWithSAdapter & SAdapter  "
+    fig.text(0.5, 0.004, "Sumber: models/hybrid_convnext_vit_s_adapter.py — ViTWithSAdapter & SAdapter  "
              "(urutan sesuai kode: x = block(x); x = adapter(x))", ha="center", fontsize=8,
              color=MUTED)
     save(fig, "02_ViT_Branch_Detail.png")
@@ -700,7 +700,7 @@ def draw_fusion():
     table(ax, PX + 0.2, 14.85, rows, [0, 3.75], size=8.6, row_h=0.4, width=PW - 0.3)
     txt(ax, PX + 0.2, 17.0, "Biaya ∝ N_q × N_k × d per lapisan", size=8, color=MUTED)
 
-    fig.text(0.5, 0.004, "Sumber: models/s_adapter_convnext_hybrid.py — BidirectionalTokenCrossAttention, "
+    fig.text(0.5, 0.004, "Sumber: models/hybrid_convnext_vit_s_adapter.py — BidirectionalTokenCrossAttention, "
              "TokenRefinementBlock, TokenAntiSpoofingClassifier", ha="center", fontsize=8, color=MUTED)
     save(fig, "03_Fusion_Module_Detail.png")
 

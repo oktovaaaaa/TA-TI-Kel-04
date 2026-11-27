@@ -1,4 +1,0 @@
-Kode,Model,Dimensi (d),Total Params,Trainable %,Best Epoch,Akurasi (%),AUC,HTER (%),APCER (%),BPCER (%),Ukuran File,Durasi (menit)
-B1,ConvNeXt_Tiny_SAdapter,768,28.1M,56.09%,10,99.50%,0.9999,0.47%,0.55%,0.38%,107.3 MB,163.78
-B2,ConvNeXt_Small_SAdapter,768,49.8M,31.70%,15,99.46%,0.9998,0.52%,0.58%,0.45%,189.9 MB,277.22
-B3,ConvNeXt_Base_SAdapter,1024,88.0M,31.65%,1,98.74%,0.9994,1.15%,1.49%,0.81%,335.7 MB,105.65

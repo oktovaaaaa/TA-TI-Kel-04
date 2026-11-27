@@ -22,8 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from models.s_adapter_convnext_hybrid import HybridTokenSAdapterConvNeXt, FocalLoss  # noqa: E402
-from models.convnext_s_adapter import ConvNeXtSAdapter  # noqa: E402
+from models.hybrid_convnext_vit_s_adapter import FocalLoss  # noqa: E402
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -159,75 +158,21 @@ def hitung_metrik(y_true, y_score, threshold: float = 0.5) -> dict:
 # ============================================================
 # MODEL & OPTIMIZER
 # ============================================================
-KONFIG_MODEL = {
-    # Seri ConvNeXt-Tiny Hybrid (H1, H2, H3)
-    "c_tiny_v_tiny": "Hybrid ConvNeXt-Tiny + ViT-Tiny (S-Adapter di kedua cabang) = H1",
-    "c_tiny_v_small": "Hybrid ConvNeXt-Tiny + ViT-Small (S-Adapter di kedua cabang) = H2",
-    "c_tiny_v_base": "Hybrid ConvNeXt-Tiny + ViT-Base (S-Adapter di kedua cabang) = H3",
-    "h1": "Hybrid ConvNeXt-Tiny + ViT-Tiny (S-Adapter di kedua cabang) = H1",
-    "h2": "Hybrid ConvNeXt-Tiny + ViT-Small (S-Adapter di kedua cabang) = H2",
-    "h3": "Hybrid ConvNeXt-Tiny + ViT-Base (S-Adapter di kedua cabang) = H3",
-    # Seri ConvNeXt-Small Hybrid (H4, H5, H6) & Baseline (B2)
-    "c_small_v_tiny": "Hybrid ConvNeXt-Small + ViT-Tiny (S-Adapter di kedua cabang) = H4",
-    "c_small_v_small": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
-    "c_small_v_base": "Hybrid ConvNeXt-Small + ViT-Base (S-Adapter di kedua cabang) = H6",
-    "h4": "Hybrid ConvNeXt-Small + ViT-Tiny (S-Adapter di kedua cabang) = H4",
-    "hybrid": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
-    "h5": "Hybrid ConvNeXt-Small + ViT-Small (S-Adapter di kedua cabang) = H5",
-    "h6": "Hybrid ConvNeXt-Small + ViT-Base (S-Adapter di kedua cabang) = H6",
-    "convnext": "ConvNeXt-Small + S-Adapter = B2",
-    "b2": "ConvNeXt-Small + S-Adapter = B2",
-}
+from models.ablasi import DAFTAR_MODEL, ALIAS, kode_resmi, buat_model as _buat_model_ablasi  # noqa: E402
 
-HYBRID_VARIANTS = {
-    "c_tiny_v_tiny": ("vit_tiny_patch16_224", "convnext_tiny", 3),
-    "h1": ("vit_tiny_patch16_224", "convnext_tiny", 3),
-    "c_tiny_v_small": ("vit_small_patch16_224", "convnext_tiny", 6),
-    "h2": ("vit_small_patch16_224", "convnext_tiny", 6),
-    "c_tiny_v_base": ("vit_base_patch16_224", "convnext_tiny", 12),
-    "h3": ("vit_base_patch16_224", "convnext_tiny", 12),
-    "c_small_v_tiny": ("vit_tiny_patch16_224", "convnext_small", 3),
-    "h4": ("vit_tiny_patch16_224", "convnext_small", 3),
-    "c_small_v_small": ("vit_small_patch16_224", "convnext_small", 6),
-    "hybrid": ("vit_small_patch16_224", "convnext_small", 6),
-    "h5": ("vit_small_patch16_224", "convnext_small", 6),
-    "c_small_v_base": ("vit_base_patch16_224", "convnext_small", 12),
-    "h6": ("vit_base_patch16_224", "convnext_small", 12),
-}
+# Semua nama yang boleh dipakai di --model: kode resmi (h1..h9, c1..c3, v4..v6) + nama lama (alias)
+KONFIG_MODEL = {k: f"{m.KODE} - {m.NAMA}" for k, m in DAFTAR_MODEL.items()}
+KONFIG_MODEL.update({alias: KONFIG_MODEL[kode] for alias, kode in ALIAS.items()})
 
 
-def buat_model(jenis: str, mode: str, pretrained: bool = True) -> nn.Module:
+def buat_model(jenis: str, mode: str = "freeze", pretrained: bool = True) -> nn.Module:
     """
-    jenis : 'c_tiny_v_tiny'/'h1' | 'c_tiny_v_small'/'h2' | 'c_tiny_v_base'/'h3' |
-            'c_small_v_tiny'/'h4' | 'c_small_v_small'/'hybrid'/'h5' | 'c_small_v_base'/'h6' |
-            'convnext'/'b2'
-    mode  : 'freeze' -> sama dengan model lama (backbone dibekukan, S-Adapter, ConvNeXt stage 4, fusion & classifier dilatih)
-            'fullft' -> seluruh parameter dilatih (full fine-tuning)
+    jenis : h1..h9 (hybrid), c1..c3 (baseline ConvNeXt), v4..v6 (baseline ViT), atau nama lama (lihat models/ablasi/__init__.py)
+    mode  : 'freeze' -> mode penelitian (PEFT). Definisi tiap model ada di models/ablasi/
+            'fullft' -> (opsional, tidak dipakai di 15 model) seluruh parameter dilatih
     """
-    freeze = (mode == "freeze")
-    if jenis in HYBRID_VARIANTS:
-        vit_name, convnext_name, num_heads = HYBRID_VARIANTS[jenis]
-        model = HybridTokenSAdapterConvNeXt(
-            vit_name=vit_name,
-            convnext_name=convnext_name,
-            adapter_bottleneck=64,
-            num_heads=num_heads,
-            num_classes=2,
-            pretrained=pretrained,
-            freeze_backbone=freeze,
-        )
-    elif jenis in ("convnext", "b2"):
-        model = ConvNeXtSAdapter(
-            variant="small",
-            adapter_bottleneck=64,
-            num_classes=2,
-            pretrained=pretrained,
-            freeze_backbone=freeze,
-        )
-    else:
-        raise ValueError(f"Jenis model tidak dikenal: '{jenis}'. Pilihan yang tersedia: {list(KONFIG_MODEL.keys())}")
-
-    if not freeze:
+    model = _buat_model_ablasi(jenis, pretrained=pretrained)
+    if mode == "fullft":
         for p in model.parameters():
             p.requires_grad = True
     return model
@@ -237,6 +182,7 @@ AWALAN_BACKBONE = (
     "vit_branch.vit.",            # backbone ViT (hybrid)
     "convnext_branch.stem", "convnext_branch.stages", "convnext_branch.norm",  # backbone ConvNeXt (hybrid)
     "stem", "stages", "norm_pre",  # backbone ConvNeXt (baseline)
+    "vit.",                        # backbone ViT (baseline)
 )
 
 

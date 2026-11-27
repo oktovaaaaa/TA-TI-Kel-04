@@ -35,14 +35,34 @@ Hasil (`split/ringkasan_split.csv`):
 | Test | 1.004 | 67.170 | 11,97% | 19.923 | 47.247 |
 | Total | 9.193 | 561.359 | 100% | 182.326 | 379.033 |
 
-## Model yang tersedia
+## 15 model ablasi (mode freeze)
+
+Definisi setiap model ada di **`models/ablasi/`** (satu file per model, fungsi `build()`):
+
+| Kode | File | Model |
+|---|---|---|
+| H1–H3 | `h1_convnext_tiny_vit_*.py` … | Hybrid ConvNeXt-Tiny + ViT Tiny/Small/Base |
+| H4–H6 | `h4_convnext_small_vit_*.py` … | Hybrid ConvNeXt-Small + ViT Tiny/Small/Base |
+| H7–H9 | `h7_convnext_base_vit_*.py` … | Hybrid ConvNeXt-Base + ViT Tiny/Small/Base |
+| C1–C3 | `c1_convnext_tiny.py` … | Baseline ConvNeXt Tiny/Small/Base + S-Adapter |
+| V4–V6 | `v4_vit_tiny.py` … | Baseline ViT Tiny/Small/Base + S-Adapter |
+
+Menjalankan semuanya (di tmux, dari root repo):
+```bash
+bash eksperimen_split_resmi/run_15_model.sh            # 15 model berurutan
+bash eksperimen_split_resmi/run_15_model.sh h7 h8 h9   # model tertentu
+```
+Model yang sudah punya `final_summary.json` (termasuk nama lama seperti
+`c_tiny_v_tiny_freeze` / `hybrid_freeze`) otomatis dilewati.
+
+## Model yang tersedia (catatan awal)
 
 | Perintah | Model | Parameter dilatih |
 |---|---|---|
 | `--model hybrid --mode freeze` | H5 (ConvNeXt-Small + ViT-Small), sama seperti model lama | 19,52 M dari 75,17 M (25,97%) |
 | `--model hybrid --mode fullft` | H5 full fine-tuning | 75,17 M (100%) |
-| `--model convnext --mode freeze` | B2 (ConvNeXt-Small + S-Adapter), sama seperti model lama | 15,77 M dari 49,75 M (31,70%) |
-| `--model convnext --mode fullft` | B2 full fine-tuning | 49,75 M (100%) |
+| `--model convnext --mode freeze` | C2 (ConvNeXt-Small + S-Adapter), sama seperti model lama | 15,77 M dari 49,75 M (31,70%) |
+| `--model convnext --mode fullft` | C2 full fine-tuning | 49,75 M (100%) |
 
 Learning rate:
 - backbone (hanya mode `fullft`): `1e-5`

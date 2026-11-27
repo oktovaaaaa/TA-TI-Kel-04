@@ -37,7 +37,7 @@ import torch
 import torch.nn.functional as F
 from torchvision import transforms
 
-from models.s_adapter_convnext_hybrid import HybridTokenSAdapterConvNeXt
+from models.hybrid_convnext_vit_s_adapter import HybridTokenSAdapterConvNeXt
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 IMG_SIZE = 224

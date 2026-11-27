@@ -2,17 +2,14 @@
 Training & Evaluasi dengan Split Resmi CelebA-Spoof (Per Subjek)
 ================================================================
 
-Model yang didukung:
-  --model c_tiny_v_tiny (atau h1)   : Hybrid ConvNeXt-Tiny + ViT-Tiny (H1)
-  --model c_tiny_v_small (atau h2)  : Hybrid ConvNeXt-Tiny + ViT-Small (H2)
-  --model c_tiny_v_base (atau h3)   : Hybrid ConvNeXt-Tiny + ViT-Base (H3)
-  --model c_small_v_tiny (atau h4)  : Hybrid ConvNeXt-Small + ViT-Tiny (H4)
-  --model hybrid / c_small_v_small (h5) : Hybrid ConvNeXt-Small + ViT-Small (H5)
-  --model c_small_v_base (atau h6)  : Hybrid ConvNeXt-Small + ViT-Base (H6)
-  --model convnext (atau b2)        : ConvNeXt-Small + S-Adapter (B2)
+Model yang didukung (definisi tiap model: models/ablasi/):
+  Hybrid   : --model h1 .. h9   (ConvNeXt Tiny/Small/Base x ViT Tiny/Small/Base)
+  Baseline : --model c1 c2 c3   (ConvNeXt Tiny/Small/Base + S-Adapter)
+             --model v4 v5 v6   (ViT Tiny/Small/Base + S-Adapter)
+  Nama lama (c_tiny_v_tiny, hybrid, convnext, dst.) tetap diterima.
 Mode:
-  --mode freeze    : backbone dibekukan (PEFT: S-Adapter + ConvNeXt stage 4 + head dilatih)
-  --mode fullft    : full fine-tuning, seluruh parameter dilatih
+  --mode freeze    : DEFAULT, mode penelitian 15 model (PEFT)
+  --mode fullft    : opsional, tidak dipakai untuk 15 model
 
 Yang dicatat SETIAP EPOCH (training_history.csv / .json):
   - waktu train, validation, test (detik) + throughput (citra/detik) + total waktu epoch
@@ -193,7 +190,8 @@ def bulatkan(m):
 def main():
     p = argparse.ArgumentParser(description="Training split resmi CelebA-Spoof")
     p.add_argument("--model", choices=list(KONFIG_MODEL.keys()), required=True)
-    p.add_argument("--mode", choices=["freeze", "fullft"], required=True)
+    p.add_argument("--mode", choices=["freeze", "fullft"], default="freeze",
+                   help="Default freeze (mode penelitian 15 model)")
     p.add_argument("--data_dir", default="./CelebA_Spoof")
     p.add_argument("--split_csv", default=str(HERE / "split" / "split.csv"))
     p.add_argument("--out_dir", default=None, help="Default: eksperimen_split_resmi/hasil/<model>_<mode>")

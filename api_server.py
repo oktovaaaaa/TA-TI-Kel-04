@@ -40,7 +40,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from models.s_adapter_convnext_hybrid import HybridTokenSAdapterConvNeXt
+from models.hybrid_convnext_vit_s_adapter import HybridTokenSAdapterConvNeXt
 
 app = FastAPI(
     title="Face Anti-Spoofing AI API",
