@@ -3,7 +3,7 @@ V5 - Baseline ViT-Small + S-Adapter (satu cabang)
 =================================================
 Strategi pelatihan: FREEZE (Parameter-Efficient Fine-Tuning)
   - Backbone ViT : DIBEKUKAN seluruhnya
-  - Dilatih      : S-Adapter di setiap blok Transformer, classifier head
+  - Dilatih      : 24 S-Adapter (2 per blok Transformer), classifier head
 
 Arsitektur lengkap: models/vit_s_adapter.py (ViTSAdapter)
 """
@@ -20,7 +20,7 @@ def build(pretrained: bool = True) -> ViTSAdapter:
     """Membangun model V5 dalam mode freeze."""
     return ViTSAdapter(
         variant=VARIAN,
-        adapter_bottleneck=64,
+        adapter_bottleneck=8,
         num_classes=2,
         pretrained=pretrained,
         freeze_backbone=True,

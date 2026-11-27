@@ -152,7 +152,7 @@ def load_h5_model(checkpoint_path: str):
     model = HybridTokenSAdapterConvNeXt(
         vit_name="vit_small_patch16_224",
         convnext_name="convnext_small",
-        adapter_bottleneck=64,
+        adapter_bottleneck=8,
         num_heads=6,
         dropout=0.1,
         num_classes=2,

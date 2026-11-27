@@ -180,8 +180,8 @@ def buat_model(jenis: str, mode: str = "freeze", pretrained: bool = True) -> nn.
 
 AWALAN_BACKBONE = (
     "vit_branch.vit.",            # backbone ViT (hybrid)
-    "convnext_branch.stem", "convnext_branch.stages", "convnext_branch.norm",  # backbone ConvNeXt (hybrid)
-    "stem", "stages", "norm_pre",  # backbone ConvNeXt (baseline)
+    "convnext_branch.stem", "convnext_branch.stages", "convnext_branch.final_norm",  # backbone ConvNeXt (hybrid)
+    "stem", "stages", "final_norm",  # backbone ConvNeXt (baseline)
     "vit.",                        # backbone ViT (baseline)
 )
 

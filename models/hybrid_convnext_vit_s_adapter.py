@@ -1,44 +1,36 @@
 """
-Hybrid S-Adapter + ConvNeXt Architecture for Face Anti-Spoofing
-================================================================
-Arsitektur Dual-Branch Hybrid S-Adapter + ConvNeXt:
+Hybrid ConvNeXt + ViT dengan S-Adapter (Statistical Adapter) untuk Face Anti-Spoofing
+====================================================================================
+S-Adapter mengikuti paper Cai dkk. (IEEE TIFS 2024, arXiv:2309.04038); implementasi di
+models/s_adapter.py dan dipakai SAMA PERSIS oleh kedua cabang.
 
-Branch 1: ConvNeXt Branch (Local Feature Extraction)
-  - Input Image: (B, 3, 224, 224)
-  - STEM (Conv 4x4, Stride 4) -> Stage 1 (56x56) -> Stage 2 (28x28) -> Stage 3 (14x14) -> Stage 4 (7x7)
-  - Output Stage 4: Feature map (B, C4, 7, 7)
-  - Tokenization (Spatial Flatten): 7x7 = 49 tokens -> (B, 49, C4)
-  - S-Adapter (Adapted for ConvNeXt Tokens):
-      * Restore 2D structure (7x7)
-      * Local statistical token processing (Token Spatial Refinement / TSR via Depthwise Conv Adapter)
-      * Projection + Residual Connection
-  - Output: Local Tokens Tc of shape (B, 49, d)
+Prinsip penyeragaman kedua cabang: keduanya diolah sebagai TOKEN MAP 2D.
+  - ViT      : 196 token patch = grid 14 x 14 (CLS tidak ikut diadaptasi)
+  - ConvNeXt : peta fitur stage 4 = grid 7 x 7 = 49 token
+  S-Adapter bekerja pada grid 2D tersebut, lalu fusi dilakukan dalam bentuk token
+  berdimensi sama d (= dimensi ViT: 192 / 384 / 768).
 
-Branch 2: Vision Transformer Branch (Global Feature Extraction)
-  - Input Image: (B, 3, 224, 224)
-  - Patch Embedding (patch size 16x16 -> 14x14 = 196 patches) -> Linear Projection (B, 196, d)
-  - Prepend [CLS] token + 1D Positional Embedding -> (B, N_v + 1, d) (total 197 tokens)
-  - Transformer Encoder Blocks with S-Adapter (L blocks):
-      * Multi-Head Self-Attention (MHSA) + Add & Norm
-      * S-Adapter (Bottleneck MLP with scaling) + Add & Norm
-      * Feed-Forward Network (MLP) + Add & Norm
-  - Output Tokens: (B, 197, d)
-  - Remove [CLS] token -> Global Tokens Tv of shape (B, 196, d)
+Cabang 1 - ConvNeXt (fitur lokal), dimensi C4 = 768 (Tiny/Small) atau 1024 (Base)
+  Input (B,3,224,224) -> Stem (B,C1,56,56) -> Stage 1-4 -> (B,C4,7,7)
+  -> + S-Adapter(peta 7x7)                     [residual]
+  -> LayerNorm akhir ConvNeXt (pretrained)
+  -> flatten 49 token -> Linear(C4 -> d) -> LayerNorm   => Tc (B,49,d)
+  Freeze: stage 1-3 + LayerNorm akhir dibekukan, stage 4 dilatih (sesuai keputusan penelitian)
 
-Fusion and Classification (Fusion Module):
-  - Local Tokens Tc (B, 49, d) & Global Tokens Tv (B, 196, d)
-  - Bidirectional Cross-Attention:
-      * Local-to-Global Attention: Q = Tc, K = Tv, V = Tv -> (B, 49, d)
-      * Global-to-Local Attention: Q = Tv, K = Tc, V = Tc -> (B, 196, d)
-  - Concatenate & Feature Refinement:
-      * Tr = [T'c ; T'v] -> (B, 49 + 196, d) = (B, 245, d)
-      * Transformer Refinement Block (Self-Attention + MLP with Add & Norm) -> (B, 245, d)
-  - Global Average Pooling: Pooling over 245 tokens -> (B, d)
-  - MLP Classifier: Linear(d -> 256) -> ReLU -> Dropout(0.3) -> Linear(256 -> 2)
-  - Output: Binary Logits / Probabilities (Real / Spoof)
+Cabang 2 - ViT (fitur global), d = 192 / 384 / 768, 12 blok
+  Input -> normalisasi ulang ke mean/std 0.5 (standar pretrained ViT timm)
+  -> Patch Embed 16x16 -> [CLS] + 196 token + pos embed -> (B,197,d)
+  -> 12 blok, masing-masing:  x += MHSA(LN x); x += S-Adapter(x)
+                              x += MLP(LN x);  x += S-Adapter(x)     (Pers. 2 paper)
+  -> LayerNorm akhir -> buang CLS => Tv (B,196,d)
+  Freeze: seluruh backbone ViT dibekukan, hanya 24 S-Adapter yang dilatih
+
+Fusi & klasifikasi
+  Bidirectional cross-attention: T'c = Attn(Q=Tc, K=V=Tv) (B,49,d); T'v = Attn(Q=Tv, K=V=Tc) (B,196,d)
+  Tr = [T'c ; T'v] (B,245,d) -> Transformer Refinement Block -> rata-rata 245 token (B,d)
+  Classifier: Linear(d -> 256) -> ReLU -> Dropout(0.3) -> Linear(256 -> 2)
 """
 
-import math
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -46,136 +38,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm import create_model
 
-
-# ─────────────────────────────────────────────
-# 1. S-ADAPTER MODULE UNTUK ViT
-#    Adapter bottleneck ringan disisipkan
-#    di setiap Transformer block untuk PEFT.
-# ─────────────────────────────────────────────
-class SAdapter(nn.Module):
-    """
-    S-Adapter (Sequential Adapter) untuk Vision Transformer.
-    Input : (B, N, D)
-    Output: (B, N, D)
-    """
-    def __init__(self, d_model: int, bottleneck_dim: int = 64):
-        super().__init__()
-        self.down_proj = nn.Linear(d_model, bottleneck_dim)
-        self.act       = nn.GELU()
-        self.up_proj   = nn.Linear(bottleneck_dim, d_model)
-        self.scale     = nn.Parameter(torch.ones(1) * 0.1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        x = self.down_proj(x)
-        x = self.act(x)
-        x = self.up_proj(x)
-        return residual + self.scale * x
+from models.s_adapter import StatisticalAdapter, ViTInputRenorm, vit_forward_dengan_s_adapter
 
 
 # ─────────────────────────────────────────────
-# 2. S-ADAPTER MODULE UNTUK ConvNeXt TOKENS
-#    (Adapted for ConvNeXt Tokens - TSR)
-#    - Restore 2D structure (7x7)
-#    - Local statistical token processing (Depthwise Conv)
-#    - Projection + Residual
-# ─────────────────────────────────────────────
-class ConvNeXtTokenSAdapter(nn.Module):
-    """
-    S-Adapter yang diadaptasikan khusus untuk ConvNeXt Tokens:
-    1. Mengembalikan token 1D (B, 49, C) ke struktur 2D grid (B, C, 7, 7)
-    2. Menjalankan Token Spatial Refinement (TSR) berbasis depthwise convolution
-       untuk menangkap statistik tekstur spoofing lokal
-    3. Residual connection dengan parameter skala terpelajar
-    4. Proyeksi ke dimensi token bersama d (shared embed_dim).
-    """
-    def __init__(
-        self,
-        in_channels: int = 768,
-        embed_dim: int = 768,
-        bottleneck_dim: int = 64,
-        spatial_size: int = 7,
-    ):
-        super().__init__()
-        self.spatial_size = spatial_size
-        self.in_channels = in_channels
-        self.embed_dim = embed_dim
-
-        # 2D Local Statistical Adapter (TSR)
-        self.adapter_2d = nn.Sequential(
-            nn.Conv2d(in_channels, bottleneck_dim, kernel_size=1, bias=False),
-            nn.BatchNorm2d(bottleneck_dim),
-            nn.GELU(),
-            # Depthwise 3x3 conv untuk menangkap pola tekstur lokal & statistik piksel
-            nn.Conv2d(
-                bottleneck_dim,
-                bottleneck_dim,
-                kernel_size=3,
-                padding=1,
-                groups=bottleneck_dim,
-                bias=False,
-            ),
-            nn.BatchNorm2d(bottleneck_dim),
-            nn.GELU(),
-            nn.Conv2d(bottleneck_dim, in_channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(in_channels),
-        )
-        self.scale = nn.Parameter(torch.ones(1) * 0.1)
-
-        # Proyeksi ke dimensi shared d jika berbeda
-        if in_channels != embed_dim:
-            self.proj = nn.Linear(in_channels, embed_dim)
-        else:
-            self.proj = nn.Identity()
-
-        self.norm = nn.LayerNorm(embed_dim)
-
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            tokens: (B, 49, in_channels)
-        Returns:
-            local_tokens Tc: (B, 49, embed_dim)
-        """
-        B, N, C = tokens.shape
-        H = W = self.spatial_size
-        residual = tokens
-
-        # Step 1: Restore 2D structure (B, 49, C) -> (B, C, 7, 7)
-        feat_2d = tokens.permute(0, 2, 1).reshape(B, C, H, W)
-
-        # Step 2: Local statistical token processing (TSR)
-        feat_adapted_2d = self.adapter_2d(feat_2d)
-
-        # Step 3: Flatten kembali ke token (B, 49, C)
-        adapted_tokens = feat_adapted_2d.flatten(2).permute(0, 2, 1)
-
-        # Step 4: Residual connection
-        x = residual + self.scale * adapted_tokens
-
-        # Step 5: Proyeksi ke dimensi embedding bersama & LayerNorm
-        x = self.proj(x)
-        out = self.norm(x)
-        return out
-
-
-# ─────────────────────────────────────────────
-# 3. CONVNEXT BRANCH (LOCAL FEATURE EXTRACTION)
+# 1. CABANG CONVNEXT (FITUR LOKAL) -> Tc (B, 49, d)
 # ─────────────────────────────────────────────
 class ConvNeXtTokenBranch(nn.Module):
-    """
-    ConvNeXt Branch untuk ekstraksi fitur lokal:
-    Input: (B, 3, 224, 224)
-    STEM (4x4, stride 4) -> Stages 1-4
-    Feature Map Stage 4: (B, C4, 7, 7)
-    Spatial Flatten: (B, 49, C4)
-    S-Adapter (Adapted for ConvNeXt Tokens) -> Local Tokens Tc (B, 49, d)
-    """
     def __init__(
         self,
         model_name: str = "convnext_tiny",
         embed_dim: int = 768,
-        adapter_bottleneck: int = 64,
+        adapter_bottleneck: int = 8,
         pretrained: bool = True,
         freeze_backbone: bool = True,
     ):
@@ -183,113 +57,62 @@ class ConvNeXtTokenBranch(nn.Module):
         base = create_model(model_name, pretrained=pretrained, num_classes=0)
         self.stem = base.stem
         self.stages = base.stages
-        self.norm = base.norm_pre
-        self.out_channels = base.num_features  # 768 untuk convnext_tiny
+        self.final_norm = base.head.norm          # LayerNorm akhir ConvNeXt (norm_pre di timm = Identity)
+        self.out_channels = base.num_features     # 768 (Tiny/Small) atau 1024 (Base)
 
-        # Freeze parameter backbone ConvNeXt jika PEFT diaktifkan
         if freeze_backbone:
             for p in base.parameters():
                 p.requires_grad = False
-            # Unfreeze stage terakhir untuk adaptasi domain lokal
-            for p in self.stages[-1].parameters():
+            for p in self.stages[-1].parameters():   # stage 4 dilatih
                 p.requires_grad = True
 
-        # S-Adapter yang diadaptasikan khusus untuk ConvNeXt tokens
-        self.convnext_adapter = ConvNeXtTokenSAdapter(
-            in_channels=self.out_channels,
-            embed_dim=embed_dim,
-            bottleneck_dim=adapter_bottleneck,
-            spatial_size=7,
-        )
+        self.s_adapter = StatisticalAdapter(self.out_channels, hidden_dim=adapter_bottleneck)
+        self.token_proj = nn.Linear(self.out_channels, embed_dim)   # C4 -> d (samakan dengan ViT)
+        self.token_norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Returns:
-            Tc: Local Tokens (B, 49, embed_dim)
-            feat_map: Raw 2D Feature Map Stage 4 (B, C4, 7, 7)
-        """
-        # Ekstraksi bertahap melalui Stem & 4 Stages
-        x = self.stem(x)       # (B, 96, 56, 56)
-        x = self.stages(x)     # (B, 768, 7, 7)
-        feat_map = self.norm(x) # (B, 768, 7, 7)
-
-        B, C, H, W = feat_map.shape
-        # Tokenization (Spatial Flatten): 7x7 = 49 -> (B, 49, C)
-        tokens_49 = feat_map.flatten(2).permute(0, 2, 1)
-
-        # S-Adapter (Adapted for ConvNeXt Tokens)
-        Tc = self.convnext_adapter(tokens_49)  # (B, 49, d)
-        return Tc, feat_map
+        """Return: Tc (B, 49, d) dan peta fitur stage 4 setelah adapter + norm (B, C4, 7, 7)."""
+        f = self.stages(self.stem(x))              # (B, C4, 7, 7)
+        f = f + self.s_adapter.forward_map(f)      # S-Adapter pada grid 7x7 (residual)
+        f = self.final_norm(f)
+        tokens = f.flatten(2).transpose(1, 2)      # (B, 49, C4)
+        Tc = self.token_norm(self.token_proj(tokens))
+        return Tc, f
 
 
 # ─────────────────────────────────────────────
-# 4. ViT BRANCH (GLOBAL FEATURE EXTRACTION)
+# 2. CABANG ViT (FITUR GLOBAL) -> Tv (B, 196, d)
 # ─────────────────────────────────────────────
 class ViTWithSAdapter(nn.Module):
-    """
-    Vision Transformer Branch dengan S-Adapter di setiap Transformer block:
-    Input : (B, 3, 224, 224)
-    Patch Embedding (16x16) -> (B, 196, d)
-    CLS + Pos Embed -> (B, 197, d)
-    L Transformer Blocks dengan S-Adapter
-    Remove [CLS] Token -> Global Tokens Tv (B, 196, d)
-    """
     def __init__(
         self,
         vit_model_name: str = "vit_base_patch16_224",
-        adapter_bottleneck: int = 64,
+        adapter_bottleneck: int = 8,
         pretrained: bool = True,
         freeze_backbone: bool = True,
     ):
         super().__init__()
+        self.input_renorm = ViTInputRenorm()
         self.vit = create_model(vit_model_name, pretrained=pretrained, num_classes=0)
-        self.embed_dim = self.vit.embed_dim  # 768 untuk ViT-Base
-
-        # Sisipkan S-Adapter ke setiap Transformer Block
-        self.adapters = nn.ModuleList([
-            SAdapter(self.embed_dim, adapter_bottleneck)
-            for _ in range(len(self.vit.blocks))
-        ])
+        self.embed_dim = self.vit.embed_dim       # 192 / 384 / 768
+        n = len(self.vit.blocks)                  # 12
+        self.adapters_msa = nn.ModuleList([StatisticalAdapter(self.embed_dim, adapter_bottleneck) for _ in range(n)])
+        self.adapters_mlp = nn.ModuleList([StatisticalAdapter(self.embed_dim, adapter_bottleneck) for _ in range(n)])
 
         if freeze_backbone:
-            # Freeze bobot utama ViT, hanya latih S-Adapter
-            for param in self.vit.parameters():
-                param.requires_grad = False
-            for param in self.adapters.parameters():
-                param.requires_grad = True
+            for p in self.vit.parameters():
+                p.requires_grad = False
 
     def forward(self, x: torch.Tensor, return_cls: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """
-        Returns:
-            Tv: Global Tokens (B, 196, d) — [CLS] token telah dibuang sesuai arsitektur diagram
-            cls_token: (B, d) opsional jika dibutuhkan
-        """
-        # Patch embedding
-        x = self.vit.patch_embed(x)             # (B, 196, d)
-
-        # Tambahkan CLS token & positional embedding
-        cls_token = self.vit.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_token, x), dim=1)    # (B, 197, d)
-        x = self.vit.pos_drop(x + self.vit.pos_embed)
-
-        # Proses melalui L Transformer blocks + S-Adapter
-        for block, adapter in zip(self.vit.blocks, self.adapters):
-            x = block(x)         # Self-Attention + MLP standar ViT
-            x = adapter(x)       # S-Adapter residual adaptation
-
-        x = self.vit.norm(x)     # LayerNorm final (B, 197, d)
-
-        # Sesuai diagram: Buang [CLS] token (indeks 0) -> sisakan 196 token global (Tv)
-        cls_out = x[:, 0, :]     # (B, d)
-        Tv = x[:, 1:, :]         # (B, 196, d)
-
-        if return_cls:
-            return Tv, cls_out
-        return Tv, None
+        tokens = vit_forward_dengan_s_adapter(
+            self.vit, self.adapters_msa, self.adapters_mlp, self.input_renorm(x)
+        )                                         # (B, 197, d)
+        Tv = tokens[:, 1:, :]                     # buang CLS -> (B, 196, d)
+        return (Tv, tokens[:, 0, :]) if return_cls else (Tv, None)
 
 
 # ─────────────────────────────────────────────
-# 5. FUSION MODULE (CROSS-ATTENTION & REFINEMENT)
+# 3. FUSI: CROSS-ATTENTION & REFINEMENT, 4. CLASSIFIER
 # ─────────────────────────────────────────────
 class BidirectionalTokenCrossAttention(nn.Module):
     """
@@ -404,7 +227,7 @@ class TokenAntiSpoofingClassifier(nn.Module):
 
 
 # ─────────────────────────────────────────────
-# 7. MODEL HYBRID LENGKAP (SESUAI GAMBAR ARSITEKTUR)
+# 5. MODEL HYBRID LENGKAP
 # ─────────────────────────────────────────────
 class HybridTokenSAdapterConvNeXt(nn.Module):
     """
@@ -424,7 +247,7 @@ class HybridTokenSAdapterConvNeXt(nn.Module):
         self,
         vit_name: str = "vit_tiny_patch16_224",
         convnext_name: str = "convnext_tiny",
-        adapter_bottleneck: int = 64,
+        adapter_bottleneck: int = 8,
         num_heads: int = 8,
         dropout: float = 0.1,
         num_classes: int = 2,
@@ -540,7 +363,7 @@ class HybridSAdapterConvNeXt(HybridTokenSAdapterConvNeXt):
         vit_name: str = "vit_base_patch16_224",
         convnext_name: str = "convnext_tiny",
         fusion_mode: str = "token_cross_attention",
-        adapter_bottleneck: int = 64,
+        adapter_bottleneck: int = 8,
         fused_channels: int = 512,
         num_classes: int = 2,
         pretrained: bool = True,
@@ -606,7 +429,7 @@ if __name__ == "__main__":
     model = HybridTokenSAdapterConvNeXt(
         vit_name="vit_tiny_patch16_224",
         convnext_name="convnext_tiny",
-        adapter_bottleneck=64,
+        adapter_bottleneck=8,
         num_classes=2,
         pretrained=False,
     ).to(device)
@@ -616,7 +439,7 @@ if __name__ == "__main__":
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print(f"Backbone ViT          : vit_tiny_patch16_224 (embed_dim d={d})")
-    print(f"Backbone ConvNeXt     : convnext_tiny (C4=768 -> adapted to d={d})")
+    print(f"Backbone ConvNeXt     : convnext_tiny (C4 -> diproyeksikan ke d={d})")
     print(f"Total Parameter       : {total:,}")
     print(f"Trainable Parameter   : {trainable:,} ({100 * trainable / total:.2f}%)")
 
